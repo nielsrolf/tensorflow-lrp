@@ -3,9 +3,6 @@ from .lrp import utils
 from . import read_mnist
 import os
 
-
-
-
 def mlp_test():
 	mnist = read_mnist.read_data_sets("{}/datasets/mnist".format(os.environ["TF_PROJECTS"]), one_hot=True)
 	
@@ -16,6 +13,8 @@ def mlp_test():
 	R_simple = mlp.mixed_lrp(y_, "simple")
 	R_abdt = mlp.mixed_lrp(y_, methods=[["deep_taylor"], ["ab", 1.], ["ab", 1.], ["ab", 1.], ["ab", 1.]])
 	R_ab = mlp.mixed_lrp(y_, methods=[["ab", 2.], ["ab", 2.], ["ab", 2.], ["ab", 2.], ["ab", 2.]])
+	R_abb = mlp.mixed_lrp(y_, methods=[["abb", 2.], ["abb", 2.], ["abb", 2.], ["abb", 2.], ["abb", 2.]])
+	R_simpleb = mlp.mixed_lrp(y_, "simpleb")
 	sess = mlp.create_session()
 
 	"""
@@ -54,13 +53,25 @@ def mlp_test():
 
 	heatmaps = sess.run(R_ab, feed_dict=mlp.feed_dict([X, T]))
 	utils.visualize(heatmaps, utils.heatmap, "yiha/ab.png")
-	print("AB: ")
+	print("AB Conervation: ")
 	mlp.conservation_check(heatmaps, correct_class_relevance)
 	input()
 
 	heatmaps_simple = sess.run(R_simple, feed_dict=mlp.feed_dict([X, T]))
 	utils.visualize(heatmaps_simple, utils.heatmap, "yiha/simple_heatmap.png")
 	print("Simple Conservation: ")
+	mlp.conservation_check(heatmaps, correct_class_relevance)
+	input()
+
+	heatmaps = sess.run(R_simpleb, feed_dict=mlp.feed_dict([X, T]))
+	utils.visualize(heatmaps, utils.heatmap, "yiha/simpleb_heatmap.png")
+	print("Simple with flat biases Conservation: ")
+	mlp.conservation_check(heatmaps, correct_class_relevance)
+	input()
+
+	heatmaps = sess.run(R_abb, feed_dict=mlp.feed_dict([X, T]))
+	utils.visualize(heatmaps, utils.heatmap, "yiha/abb_heatmap.png")
+	print("AB Conservation with flat biases: ")
 	mlp.conservation_check(heatmaps, correct_class_relevance)
 	input()
 
@@ -95,7 +106,7 @@ def cnn_test():
 
 	E = np.eye(10)
 	for c, e in enumerate(E):
-		heatmaps, _ = cnn.get_heatmaps(x, e)
+		heatmaps, _ = cnn.get_numpy_deeptaylor(x, e)
 		utils.visualize(heatmaps, utils.heatmap, "cooolcnn/class_{}.png".format(c))
 	nothing, _ = cnn.get_heatmaps(x, np.zeros(10))
 	utils.visualize(nothing, utils.heatmap, "cooolcnn/nothing.png")

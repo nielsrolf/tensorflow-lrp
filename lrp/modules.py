@@ -1,5 +1,6 @@
 import numpy
 from . import utils
+import copy
 
 # -------------------------
 # Feed-forward network
@@ -97,6 +98,7 @@ class Pooling:
 		return DX
 
 	def relprop(self,R):
+		R = numpy.reshape(R, self.A.shape)
 		Z = (self.forward(self.X)+1e-9); S = R / Z
 		C = self.gradprop(S);			R = self.X*C
 		return R

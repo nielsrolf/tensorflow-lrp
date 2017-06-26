@@ -65,6 +65,10 @@ class Network():
 				R = l.simple_lrp(R)
 			elif m[0] == "ab" or m[0] == "alphabeta":
 				R = l.alphabeta_lrp(R, m[1])
+			elif m[0] == "simpleb":
+				R = l.simple_lrp(R)
+			elif m[0] == "abb" or m[0] == "alphabeta":
+				R = l.alphabeta_lrp(R, m[1])
 			else:
 				raise Exception("Unknown LRP method: {}".format(m[0]))
 		return R	
@@ -225,6 +229,22 @@ class Linear(Layer):
 		self.output_tensor = self.activators + self.biases
 		return self.output_tensor
 
+	def simple_bias_lrp(self, R):
+		# calculate activators = input_tensor*weights, but also each summand
+		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
+		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
+		weights_ = tf.reshape(self.weights, [1] + shape(self.weights))
+		activators_ = tf.multiply(input_, weights_) + tf.divide(tf.expand_dims(self.biases, axis=0), shape(input_)[1]) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
+		activators = tf.reduce_sum(activators_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
+		# normalize a_ axis 1
+		activator_share = tf.divide(activators_, tf.expand_dims(activators, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
+		R_ = tf.expand_dims(R, axis=1) #[None, 1, j]: input relevance j
+		R_out_ = tf.multiply(R_, activator_share)		#[None, i, j]: R_in[j]/a_[,i,j]
+		R_out = tf.reduce_sum(R_out_, axis=2)
+
+		#self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return R_out
+
 	def simple_lrp(self, R):
 		# calculate activators = input_tensor*weights, but also each summand
 		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
@@ -266,20 +286,30 @@ class Linear(Layer):
 		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
 		return R_out
 
-	def alphabeta_lrp_(self, R, alpha=1.):
-		X = self.input_tensor	
-		activators_plus = tf.nn.relu(self.activators)
-		S_plus = tf.divide(R, activators_plus)
-		A_plus = tf.nn.relu(tf.multiply(tf.reshape(X, [1]+X.get_shape().as_list()), tf.transpose(tf.weights)))
-		R_plus = tf.matmul(A_plus, S_plus)
+	def alphabeta_lrp_bias(self, R, alpha=1.):
+		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
 
-		activators_minus = tf.nn.relu(-self.activators)
-		S_minus = tf.divide(R, activators_minus)
-		A_minus = tf.nn.relu(-tf.multiply(tf.reshape(X, [1]+X.get_shape().as_list()), tf.transpose(tf.weights)))
-		R_minus = tf.matmul(A_minus, S_minus)
+		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
+		weights_ = tf.reshape(self.weights, [1] + shape(self.weights))
+		activators_ = tf.multiply(input_, weights_) + tf.divide(tf.expand_dims(self.biases, axis=0), shape(input_)[1]) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
+		
+		activators_plus_ = tf.nn.relu(activators_)
+		activators_plus = tf.reduce_sum(activators_plus_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
+		# normalize a_ axis 1
+		activators_plus_share = tf.divide(activators_plus_, tf.expand_dims(activators_plus, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
+		R_ = tf.expand_dims(R, axis=1)
+		R_plus_out_ = tf.multiply(R_, activators_plus_share)		#[None, i, j]: R_in[j]/a_[,i,j]
+		R_plus_out = tf.reduce_sum(R_plus_out_, axis=2)
 
-		R = tf.multiply(R_plus, alpha) + tf.multiply(R_minus, 1.-alpha)
-		return R
+		activators_minus_ = tf.nn.relu(-activators_)
+		activators_minus = tf.reduce_sum(activators_minus_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
+		# normalize a_ axis 1
+		activators_minus_share = tf.divide(activators_minus_, tf.expand_dims(activators_minus, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
+		R_minus_out_ = tf.multiply(R_, activators_minus_share)		#[None, i, j]: R_in[j]/a_[,i,j]
+		R_minus_out = tf.reduce_sum(R_minus_out_, axis=2)
+
+		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
+		return R_out
 
 class NextLinear(Linear):
 	def __init__(self, *args, **kwargs):
