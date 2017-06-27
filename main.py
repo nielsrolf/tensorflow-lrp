@@ -97,8 +97,18 @@ def cnn_test():
 	cnn.load_params("yuhu")
 	acc, _ = sess.run([cnn.accuracy, cnn.train], feed_dict=cnn.feed_dict(mnist.test.next_batch(200)))
 	print("Finally: ", acc)
+
 	x, T = mnist.train.next_batch(10)
-	cnn.test(x, T)
+	#cnn.test(x, T)
+
+	npcnn = cnn.to_numpy()
+	np_y = npcnn.forward(x)
+	cnn_y = sess.run(cnn.y, feed_dict=cnn.feed_dict([x, T]))
+	print(np_y-cnn_y)
+	input()
+
+
+
 
 	heatmaps, _ = cnn.get_numpy_deeptaylor(x, T)
 	utils.visualize(x, utils.heatmap, "cooolcnn/x.png")
@@ -108,10 +118,10 @@ def cnn_test():
 	for c, e in enumerate(E):
 		heatmaps, _ = cnn.get_numpy_deeptaylor(x, e)
 		utils.visualize(heatmaps, utils.heatmap, "cooolcnn/class_{}.png".format(c))
-	nothing, _ = cnn.get_heatmaps(x, np.zeros(10))
+	nothing, _ = cnn.get_numpy_deeptaylor(x, np.zeros(10))
 	utils.visualize(nothing, utils.heatmap, "cooolcnn/nothing.png")
 
 	cnn.close_sess()
 
 
-mlp_test()
+cnn_test()

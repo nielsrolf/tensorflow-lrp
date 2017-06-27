@@ -402,7 +402,6 @@ class FirstConvolution(Convolution):
 
 	def forward(self, input_tensor):
 		input_shape = input_tensor.get_shape().as_list()
-		print("inpt_shape:", input_shape, input_shape[1:-1])
 		if len(input_shape) < 4:
 			h = np.prod(input_shape[1])/28
 			print("FirstConvolution: reshape to height:", h)

@@ -11,7 +11,10 @@ class Network:
 		self.layers = layers
 
 	def forward(self,Z):
-		for l in self.layers: Z = l.forward(Z)
+		for l in self.layers:
+			print("\n", type(l), ":", Z.shape)
+			Z = l.forward(Z)
+			print("						-> ", Z.shape)
 		return Z
 
 	def gradprop(self,DZ):
@@ -55,6 +58,8 @@ class Linear:
 		self.B = B
 
 	def forward(self,X):
+		if len(X.shape) > 2:
+			X = numpy.reshape(X, [X.shape[0], numpy.prod(X.shape[1:])])
 		self.X = X
 		self.A = numpy.dot(self.X,self.W)+self.B
 		return self.A
@@ -151,6 +156,14 @@ class NextConvolution(Convolution):
 		return R
 
 class FirstConvolution(Convolution):
+
+	def forward(self,X):
+		if len(X.shape) < 4:
+			h = X.shape[1]/28
+			print("FirstConvolution: reshape to height:", h)
+			X = numpy.reshape(X, [X.shape[0], int(h), 28, 1])
+		return super().forward(X)
+
 	def relprop(self,R):
 		iself = copy.deepcopy(self); iself.B *= 0
 		nself = copy.deepcopy(self); nself.B *= 0; nself.W = numpy.minimum(0,nself.W)
