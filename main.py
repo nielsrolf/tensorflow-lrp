@@ -8,7 +8,7 @@ def mlp_test():
 	
 	X = tf.placeholder(tf.float32, shape=[None, 784])
 	y_ = tf.placeholder(tf.float32, shape=[None, 10])
-	mlp = Network([FirstLinear(300), ReLU(), NextLinear(100), ReLU(), NextLinear(10)], X, y_)
+	mlp = Network([Format(), FirstLinear(300), ReLU(), NextLinear(100), ReLU(), NextLinear(10)], X, y_)
 	R = mlp.deep_taylor(y_)
 	R_simple = mlp.mixed_lrp(y_, "simple")
 	R_abdt = mlp.mixed_lrp(y_, methods=[["deep_taylor"], ["ab", 1.], ["ab", 1.], ["ab", 1.], ["ab", 1.]])
@@ -28,6 +28,8 @@ def mlp_test():
 	print("Finally: ", acc)
 
 	X, T = mnist.train.next_batch(10); feed_dict=mlp.feed_dict([X, T])
+
+	mlp.layerwise_tfnp_test(X, T)
 
 	#mlp.test(X, T)
 	print("\n----------------------\n")
@@ -75,53 +77,89 @@ def mlp_test():
 	mlp.conservation_check(heatmaps, correct_class_relevance)
 	input()
 
+	# Again numpy deeptaylor, but now explain a certain class rather than the correct class
+	E = np.eye(10)
+	for c, e in enumerate(E):
+		heatmaps, _ = mlp.get_numpy_deeptaylor(X, e)
+		utils.visualize(heatmaps, utils.heatmap, "yiha/class_{}.png".format(c))
+
+	# Show how a zero image looks like, for reference
+	nothing, _ = mlp.get_numpy_deeptaylor(X, np.zeros(10))
+	utils.visualize(nothing, utils.heatmap, "cooolcnn/nothing.png")
+
 	mlp.close_sess()
 
 def cnn_test():
 	mnist = read_mnist.read_data_sets("{}/datasets/mnist".format(os.environ["TF_PROJECTS"]), one_hot=True)
 	
+	# Create placeholders for the network
 	X = tf.placeholder(tf.float32, shape=[None, 784])
 	y_ = tf.placeholder(tf.float32, shape=[None, 10])
-	cnn = Network([FirstConvolution([5, 5, 1, 32]), ReLU(), Pooling(),
+
+	# specify a network architecture
+	cnn = Network([Format(), FirstConvolution([5, 5, 1, 32]), ReLU(), Pooling(),
 		NextConvolution([5, 5, 32, 64]), ReLU(), Pooling(),
 		NextLinear(1024), ReLU(),
 		NextLinear(10)], X, y_)
+
+	# Get a tensor that calculates deeptaylor explanation for the correct class
+	#R_deeptaylor = cnn.deep_taylor(y_)
+
+	# instanciate network by creating a session
 	sess = cnn.create_session()
 	"""
+	# train the network for 200 train steps
 	for i in range(200):
 		acc, _ = sess.run([cnn.accuracy, cnn.train], feed_dict=cnn.feed_dict(mnist.train.next_batch(50)))
 		print(acc)
-	
+	# save learned params to dir "yuhu"
 	cnn.save_params("yuhu")
 	"""
 	cnn.load_params("yuhu")
-	acc, _ = sess.run([cnn.accuracy, cnn.train], feed_dict=cnn.feed_dict(mnist.test.next_batch(200)))
+	print("Now check out accuracy:")
+	acc, = sess.run([cnn.accuracy], feed_dict=cnn.feed_dict(mnist.test.next_batch(200)))
 	print("Finally: ", acc)
 
+	# get a batch that we use for testing now
 	x, T = mnist.train.next_batch(10)
-	#cnn.test(x, T)
+	feed_dict = cnn.feed_dict([x, T])
 
-	npcnn = cnn.to_numpy()
-	np_y = npcnn.forward(x)
+
+	# test again if numpy and tensorflow networks are identical:
+	# forward the same batch in tf network
 	cnn_y = sess.run(cnn.y, feed_dict=cnn.feed_dict([x, T]))
-	print(np_y-cnn_y)
-	input()
+	# get a networ with numpy backend
+	npcnn = cnn.to_numpy()
+	# use it
+	np_y = npcnn.forward(x)
+	print("Max error: ",np.absolute(np_y-cnn_y).max()); input()
 
 
+	# test if numpy and tensorflow networks are identical
+	#cnn.layerwise_tfnp_test(x, T)
 
-
+	# LRP Testing
+	# get deeptaylor with numpy implementation
 	heatmaps, _ = cnn.get_numpy_deeptaylor(x, T)
 	utils.visualize(x, utils.heatmap, "cooolcnn/x.png")
 	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/correct_class.png")
 
-	E = np.eye(10)
-	for c, e in enumerate(E):
-		heatmaps, _ = cnn.get_numpy_deeptaylor(x, e)
-		utils.visualize(heatmaps, utils.heatmap, "cooolcnn/class_{}.png".format(c))
-	nothing, _ = cnn.get_numpy_deeptaylor(x, np.zeros(10))
-	utils.visualize(nothing, utils.heatmap, "cooolcnn/nothing.png")
+	# deeptaylor with tensorflow
+	heatmaps = sess.run(R_deeptaylor, feed_dict=feed_dict)
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/correct_class_tensorflow.png")
+
+	
 
 	cnn.close_sess()
 
+def test():
+	a = np.random.normal(size=[10, 50])
+	b = np.random.normal(size=[50, 8])
+	A = tf.constant(a)
+	B = tf.constant(b)
+	C = tensordot(A, B, axes=1)
+	with tf.Session() as sess:
+		c = sess.run(C, feed_dict={})
+	print(c-a.dot(b))
 
-cnn_test()
+mlp_test()

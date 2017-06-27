@@ -4,23 +4,35 @@ import numpy as np
 import tensorflow as tf
 
 def weight_variable(shape):
-	try:
-		s = shape[0].as_list()
-		shape = s[1:] + shape[1:]
+	try: s = shape[0].as_list(); shape = s[1:] + shape[1:]
 	except: pass
-	initial = tf.truncated_normal(shape, stddev=0.1)
-	return tf.Variable(initial)
+	return tf.Variable(tf.truncated_normal(shape, stddev=0.1))
 
-def bias_variable(shape):
-	initial = tf.constant(0.1, shape=shape)
-	return tf.Variable(initial)
+def bias_variable(shape): return tf.Variable(tf.constant(0.1, shape=shape))
+
+def shape(T):
+	if isinstance(T, tf.Tensor): return [-1 if d is None else d for d in T.get_shape().as_list()]
+	return [-1 if d is None else d for d in T.shape]
+
+def expand_dims(A, axes=[]):
+	for axis in axes:
+		A = tf.expand_dims(A, axis=axis)
+	return A
+
+def tensordot(A, B, axes):
+	# Because tf.tensordot fucks with the shape
+	new_len = len(shape(A))+len(shape(B))-axes
+	A_ = expand_dims(A, axes=range(len(shape(A)),new_len))
+	B_ = expand_dims(B, axes=range(new_len-len(shape(B))))
+	reduce_axis = list(range(len(shape(A))-axes, len(shape(A))))
+	return tf.reduce_sum(tf.multiply(A_, B_), axis=reduce_axis)
 
 # -------------------------
-# Network, gets input with values in range [0, 1]
+# Network
 # -------------------------
 class Network():
 	def __init__(self, layers, input_tensor, y_):
-		self.layers = [Format()]+layers
+		self.layers = layers
 		self.input_tensor = input_tensor
 		self.y_ = y_
 		self.session = None
@@ -99,11 +111,11 @@ class Network():
 	def to_numpy(self):	
 		# extract Parameters, and return a modules.network
 		lrp_layers = []
-		for layer in self.layers[1:]:
+		for layer in self.layers:
 			lrp_layers.append(layer.to_numpy())
 		return modules.Network(lrp_layers)
 
-	def lrp_forward(self, X):
+	def __lrp_forward(self, X):
 		lrp_network = self.to_numpy()
 		activation_tensors = [layer.input_tensor for layer in self.layers[1:]] + [self.layers[-1].output_tensor] # actiovation[0] is formated input, serves as input for layer 0 of numpy network
 		activation = self.sess.run(activation_tensors, feed_dict={self.input_tensor: X})
@@ -111,10 +123,16 @@ class Network():
 			np_activation = np.reshape(lrp_network.layers[i].forward(activation[i]), activation[i+1].shape) # np forwards the tf activation, so a defect early layer will be detected, but the later layers can still pass the test
 		return lrp_network, np_activation
 
-	def get_numpy_deeptaylor(self, X, dim): # dim: one hot vector; heatmaps for correct class: dim = y_
+	def __get_numpy_deeptaylor(self, X, dim): # dim: one hot vector; heatmaps for correct class: dim = y_
 		# X: either np.array or tf.Tensor
 		lrp_network, y = self.lrp_forward(X)
 		return lrp_network.relprop(y*dim), y*dim
+
+	def get_numpy_deeptaylor(self, X, dim): # dim: one hot vector; heatmaps for correct class: dim = y_
+		# X: either np.array or tf.Tensor
+		numpy_network = self.to_numpy()
+		y = numpy_network.forward(X)
+		return numpy_network.relprop(y*dim), y*dim
 
 	def conservation_check(self, heatmaps, R):
 		# input as numpy.array
@@ -123,7 +141,6 @@ class Network():
 		hR = np.sum(h, axis=1)
 		R = np.reshape(R, hR.shape)
 		err = np.absolute(hR-R)
-
 		print("Relevance - Sum(heatmap) = ", err)
 
 	def simple_test(self, fdict):
@@ -138,26 +155,15 @@ class Network():
 			#print("share.sum(axis=1) :", np.sum(s, axis=1))
 			input()
 
-	def test(self, X, T):
-		# Forwards X through the tensorflow network and the hopefully identical numpy network, and checks the activations for equality
-		lrp_network = self.to_numpy()
-		activation_tensors = [layer.input_tensor for layer in self.layers[1:]] + [self.layers[-1].output_tensor] # actiovation[0] is formated input, serves as input for layer 0 of numpy network
-		print("self.input_tensor.shape", self.input_tensor.shape)
-		print("X.shape", X.shape)
-		activation = self.sess.run(activation_tensors, feed_dict={self.input_tensor: X})
-
-		for i in range(len(self.layers)-1):
-			np_activation = np.reshape(lrp_network.layers[i].forward(activation[i]), activation[i+1].shape) # np forwards the tf activation, so a defect early layer will be detected, but the later layers can still pass the test
-			np_error = np.sum(np_activation - activation[i+1], axis=1)
-			if np.mean(np_error) > 0.00001: # rather look for max(abs(error))
-				raise Warning("Layer {} ({}) forwarded with error {}".format(i, type(self.layers[i]), np_error))
-			else:
-				print("Numpy Layer and Tensorflow Layer are equal")
-
-		print("Test accuracy")
-		_, np_y = self.lrp_forward(X)
-		acc = np.mean(np.equal(np.argmax(np_y, axis=1), np.argmax(T, axis=1)))
-		print("Numpy acc: ", acc)
+	def layerwise_tfnp_test(self, X, T):
+		np_nn = self.to_numpy()
+		cnn_layer_tensors = [layer.output_tensor for layer in self.layers]
+		cnn_layer_activations = self.sess.run(cnn_layer_tensors, feed_dict=self.feed_dict([X, T]))
+		a = X
+		for l, a_ in zip(np_nn.layers, cnn_layer_activations):
+			a = l.forward(a)
+			np.testing.assert_allclose(a, a_, atol=1e-5)
+		print("All np/tf layers do the same :) ")
 		
 	def feed_dict(self, batch):
 		return {self.input_tensor: batch[0], self.y_: batch[1]}
@@ -180,7 +186,7 @@ class Layer():
 			return self.lrp_module(W, B)
 
 # -------------------------
-# Format Layer for tf Network
+# Format Layer
 # -------------------------
 class Format(Layer): # use only in tf network
 	def forward(self, input_tensor):
@@ -189,7 +195,7 @@ class Format(Layer): # use only in tf network
 		return self.output_tensor
 
 	def to_numpy(self):
-		raise Exception("Format layer is not a real layer and does not exist in numpy graph")
+		return modules.Format()
 
 # -------------------------
 # ReLU Layer
@@ -231,9 +237,8 @@ class Linear(Layer):
 
 	def simple_bias_lrp(self, R):
 		# calculate activators = input_tensor*weights, but also each summand
-		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
 		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.reshape(self.weights, [1] + shape(self.weights))
+		weights_ = tf.expand_dims(self.weights, axis=0)
 		activators_ = tf.multiply(input_, weights_) + tf.divide(tf.expand_dims(self.biases, axis=0), shape(input_)[1]) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
 		activators = tf.reduce_sum(activators_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
 		# normalize a_ axis 1
@@ -247,9 +252,8 @@ class Linear(Layer):
 
 	def simple_lrp(self, R):
 		# calculate activators = input_tensor*weights, but also each summand
-		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
 		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.reshape(self.weights, [1] + shape(self.weights))
+		weights_ = tf.expand_dims(self.weights, axis=0)
 		activators_ = tf.multiply(input_, weights_) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
 		activators = tf.reduce_sum(activators_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
 		# normalize a_ axis 1
@@ -262,10 +266,8 @@ class Linear(Layer):
 		return R_out
 
 	def alphabeta_lrp(self, R, alpha=1.):
-		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
-
 		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.reshape(self.weights, [1] + shape(self.weights))
+		weights_ = tf.expand_dims(self.weights, axis=0)
 		activators_ = tf.multiply(input_, weights_) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
 		
 		activators_plus_ = tf.nn.relu(activators_)
@@ -290,7 +292,7 @@ class Linear(Layer):
 		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
 
 		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.reshape(self.weights, [1] + shape(self.weights))
+		weights_ = tf.expand_dims(self.weights, axis=0)
 		activators_ = tf.multiply(input_, weights_) + tf.divide(tf.expand_dims(self.biases, axis=0), shape(input_)[1]) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
 		
 		activators_plus_ = tf.nn.relu(activators_)
@@ -344,31 +346,23 @@ class FirstLinear(Linear):
 # Sum-pooling layer
 # -------------------------
 class Pooling(Layer):
-
 	def forward(self, input_tensor):
 		input_shape = input_tensor.get_shape().as_list()[1:3]
 		if input_shape[0] % 2 + input_shape[1] % 2 > 0:
 			raise Exception("Input for pooling layer must have even spatial dims, but has "+str(input_shape))
 		self.input_tensor = input_tensor
-		self.output_tensor = tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2,2])*2		
+		self.output_tensor = tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2,2])*2	
 		return self.output_tensor	
 
-	"""
-	def deep_taylor(self, R):
-		self.R_in = R
-		Z = self.input_tensor+1e-9
+	def deep_taylor(self,R):
+		print("Pooling: Forward:", self.input_tensor.shape, " -> ", self.output_tensor.shape)
+		print("Reshape R from ", R.get_shape(), "to ", shape(self.output_tensor))
+		R = tf.reshape(R, shape(self.output_tensor))
+		Z = self.output_tensor+1e-9
 		S = tf.divide(R, Z)
-
-		self.DY = DY
-		DX = self.input_tensor*0
-
-		for i,j in [(0,0),(0,1),(1,0),(1,1)]: DX[:,i::2,j::2,:] += DY*0.5
-		return DX
-
-		C = self.gradprop(S)
-		self.R_out = tf.multiply(self.input_tensor, C)
-		return self.R_out
-		"""
+		C = tf.gradients(S, self.input_tensor)
+		R = tf.multiply(self.output_tensor, C)
+		return R
 
 	def to_numpy(self):
 		return modules.Pooling()
@@ -382,18 +376,39 @@ class Convolution(Layer):
 		if len(w_shape) != 4:
 			raise Exception("Convolutional Layer: w has to be of rank 4, but is {}. Maybe add None as batch_size dim".format(len(w_shape)))
 
+	def conv2d(self, X, W):
+		return tf.nn.conv2d(X, W, [1, 1, 1, 1], padding="VALID")
+
 	def forward(self, input_tensor):
 		self.input_tensor = input_tensor
 		_, dx1, dx2, channels_x = input_tensor.get_shape().as_list()
 		self.weights = weight_variable(self.w_shape)
 		self.biases = bias_variable([1, 1, 1, self.w_shape[-1]]) 
-		self.output_tensor = tf.nn.conv2d(self.input_tensor, self.weights, [1, 1, 1, 1], padding="VALID") + self.biases
+		self.output_tensor = self.conv2d(self.input_tensor, self.weights) + self.biases
 		return self.output_tensor
+
+	def gradprop(self,DY,W):
+		mb,wy,hy,ny = DY.shape
+		ww,hw,nx,ny = W.shape
+		DX = self.input_tensor*0
+		for i in range(ww):
+			for j in range(hw):
+				W_ = tf.transpose(W[i,j,:,:])
+				DX[:,i:i+wy,j:j+hy,:] += tf.tensordot(DY, W_, axes=1)
+		return DX
 
 class NextConvolution(Convolution):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
 		self.lrp_module = modules.NextConvolution
+
+	def deep_taylor(self, R):
+		W_plus = tf.nn.relu(self.weights)
+		Z = tf.nn.conv2d(self.input_tensor, W_plus, [1, 1, 1, 1], padding="VALID")+1e-9
+		S = tf.divide(R, Z)
+		C = self.gradprop(S, W_plus)
+		R_out = tf.divide(self.input_tensor, Z)
+		return R_out
 	
 class FirstConvolution(Convolution):
 	def __init__(self, *args, **kwargs):
@@ -406,8 +421,15 @@ class FirstConvolution(Convolution):
 			h = np.prod(input_shape[1])/28
 			print("FirstConvolution: reshape to height:", h)
 			input_tensor = tf.reshape(input_tensor, [-1, int(h), 28, 1])
-
-
 		return super().forward(input_tensor)
+
+	def deep_taylor(self, R):
+		W_plus = tf.nn.relu(self.weights)
+		W_minus = -tf.nn.relu(-self.weights)
+		X,L,H = self.input_tensor,self.input_tensor*0+utils.lowest,self.input_tensor*0+utils.highest
+		Z = self.conv2d(X, self.weights)-self.conv2d(L, W_plus)-self.conv2d(H, W_minus)+1e-09
+		S = tf.divide(R, Z)
+		R_out = X*self.gradprop(S, self.weights)-L*self.gradprop(S, W_plus)-H*self.gradprop(S, W_minus)
+		return R_out
 
 	

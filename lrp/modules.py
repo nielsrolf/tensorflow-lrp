@@ -24,13 +24,22 @@ class Network:
 	def relprop(self,R):
 		print("---------------------------\nRelevance Layerwise")
 		for l in self.layers[::-1]:
-			print("Current layer relavance shape: ", R.shape)
-			print("Activation shape of target layer: ", l.A.shape)
-			print("Raw R", R.shape)
+			print(type(l), "Relevance input: ", R.shape)
+			print("Activation of that layer: ", l.A.shape)
+			#input()
 			R = l.relprop(R)
+			print("Relevance output: ", R.shape, "\n\n")
 			#R.reshape(l.A.shape)
 			#print("Reshaped R", R.shape)
 		print(R.shape)
+		return R
+
+class Format():
+	def forward(self, X):
+		self.A = X*(utils.highest-utils.lowest)+utils.lowest
+		return self.A
+
+	def relprop(self, R):
 		return R
 
 # -------------------------
@@ -70,6 +79,7 @@ class Linear:
 
 class NextLinear(Linear):
 	def relprop(self,R):
+		R = numpy.reshape(R, self.A.shape)
 		V = numpy.maximum(0,self.W)
 		Z = numpy.dot(self.X,V)+1e-9; S = R/Z
 		C = numpy.dot(S,V.T)
@@ -118,7 +128,6 @@ class Convolution:
 		self.B = B
 
 	def forward(self,X):
-
 		self.X = X
 		mb,wx,hx,nx = X.shape
 		ww,hw,nx,ny = self.W.shape

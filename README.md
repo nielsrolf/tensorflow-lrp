@@ -1,7 +1,5 @@
-Documentation:
-
-With this model you can define, train, save and load ad neural network, while using tensorflow as backend.
-This model also includes a numpy implementation (credits to Grégoire Montavon) for forwarding batches in a trained network and explaning the last layer's output by Deep Taylor Decomposition. The tensorflow Network can automatically be exported to numpy, and therefore acts as wrapper for the eep Taylor Decomposition.
+With this modul you can define, train, save and load neural network, and use various LRP explaining techniques.
+All of this is possible with tensorflow as backenend, and the tensorflow network can be exported to a identical network with numpy as backend. The numpy implementation only has limited features though, namely forwarding and deep taylor LRP.
 
 ## Use
 
@@ -37,7 +35,7 @@ Calculate and plot some heatmaps: first, we need to get the samples for that the
 ```
 	X, T = mnist.train.next_batch(10)
 
-	heatmaps, _ = mlp.get_heatmaps(X, T)
+	heatmaps, _ = mlp.get_numpy_deeptaylor(X, T)
 	utils.visualize(X, utils.heatmap, "yiha/x.png")
 	utils.visualize(heatmaps, utils.heatmap, "yiha/correct_class.png")
 
@@ -73,11 +71,12 @@ If you implemented a new relevance propagation rule, you can check the conservat
 
 ## Network Architecture and Training
 This module allows to define, train and load neural networks with some restricted architectures:
-Network := Convolutional Layer + Next Linear Layers | Linear Layers
-Convolutional Layers := FirstConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
-NextConvolutional Layers := NextConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
-Linear Layers := FirstLinear (+ Next Linear Layers)
-Next Linear Layers := NextLinar (+ Next Linear Layers)
+
+- Network := Convolutional Layer + Next Linear Layers | Linear Layers
+- Convolutional Layers := FirstConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
+- NextConvolutional Layers := NextConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
+- Linear Layers := FirstLinear (+ Next Linear Layers)
+- Next Linear Layers := NextLinar (+ Next Linear Layers)
 
 The loss function is hardcoded in train.py and per default set to:
 loss: cross_entropy(sigmoid(y), y_)
