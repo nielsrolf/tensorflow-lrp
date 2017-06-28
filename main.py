@@ -95,6 +95,7 @@ def cnn_test():
 	# Create placeholders for the network
 	X = tf.placeholder(tf.float32, shape=[None, 784])
 	y_ = tf.placeholder(tf.float32, shape=[None, 10])
+	discriminant_filter = tf.constant([-1.]*10, dtype=tf.float32) + 2*y_
 
 	# specify a network architecture
 	cnn = Network([Format(), FirstConvolution([5, 5, 1, 32]), ReLU(), Pooling(),
@@ -103,7 +104,8 @@ def cnn_test():
 		NextLinear(10)], X, y_)
 
 	# Get a tensor that calculates deeptaylor explanation for the correct class
-	#R_deeptaylor = cnn.deep_taylor(y_)
+	#R_simple = cnn.mixed_lrp(y_, "simple")
+	R_deeptaylor = cnn.deep_taylor(y_)
 
 	# instanciate network by creating a session
 	sess = cnn.create_session()
@@ -142,24 +144,18 @@ def cnn_test():
 	# get deeptaylor with numpy implementation
 	heatmaps, _ = cnn.get_numpy_deeptaylor(x, T)
 	utils.visualize(x, utils.heatmap, "cooolcnn/x.png")
-	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/correct_class.png")
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/deeptaylor_np.png")
 
+	"""
+	# simple lrp with tensorflow
+	heatmaps = sess.run(R_simple, feed_dict=feed_dict)
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/simple_lrp.png")
+	"""
 	# deeptaylor with tensorflow
 	heatmaps = sess.run(R_deeptaylor, feed_dict=feed_dict)
-	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/correct_class_tensorflow.png")
-
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/deeptaylor_tf.png")
 	
 
 	cnn.close_sess()
 
-def test():
-	a = np.random.normal(size=[10, 50])
-	b = np.random.normal(size=[50, 8])
-	A = tf.constant(a)
-	B = tf.constant(b)
-	C = tensordot(A, B, axes=1)
-	with tf.Session() as sess:
-		c = sess.run(C, feed_dict={})
-	print(c-a.dot(b))
-
-mlp_test()
+cnn_test()
