@@ -200,9 +200,9 @@ class Format(Layer):
 class Flatten(Layer):
 	def forward(self, input_tensor):
 		self.input_tensor = input_tensor
-		print("Flat neurons: ", np.prod(shape(input_tensor)[1:]))
 		self.output_tensor = tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
 		return self.output_tensor
+
 # -------------------------
 # Activation Layers
 # -------------------------
@@ -436,63 +436,21 @@ class Convolution(Layer):
 		self.input_tensor = input_tensor
 		_, dx1, dx2, channels_x = input_tensor.get_shape().as_list()
 		self.weights = weight_variable(self.w_shape)
-		self.biases = bias_variable([1, 1, 1, self.w_shape[-1]]) 
-		self.output_tensor = self.conv2d(self.input_tensor, self.weights) + self.biases
+		self.biases = bias_variable([1, 1, 1, self.w_shape[-1]])
+		self.activators = self.conv2d(self.input_tensor, self.weights)
+		self.output_tensor = self.activators + self.biases
 		return self.output_tensor
-
-	"""
-	def to_dense(self):
-		input_flat = tf.reshape(self.input_tensor, [-1, np.prod(shape(self.input_tensor)[1:])])
-		dense_layer = Linear(np.prod(shape(self.output_tensor)[1:]))
-	"""	
-
-	def _simple_lrp(self, R):
-		R = tf.reshape(R, shape(self.output_tensor))
-
-		w_w, h_w, _, _ = shape(self.weights); w_w, h_w = int(w_w), int(h_w)
-		padding = np.array([[0,0], [w_w-1, w_w-1], [h_w-1, h_w-1], [0,0]])
-		R_ = tf.pad(R, padding)
-
-		wT = tf.einsum('ijkl->jilk', self.weights)
-		normalizer = tf.einsum('jilk->jik', wT)
-		wT_normal = tf.divide(wT, tf.expand_dims(normalizer, axis=2))
-		R_per_in_act = self.conv2d(R_, wT_normal)
-		R_out = tf.multiply(self.input_tensor, R_per_in_act)
-		
-		self.R_simple = R_out 
-		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
-		return R_out
 
 	def simple_lrp(self, R):
 		R = tf.reshape(R, shape(self.output_tensor))
-		R_per_act_ = tf.divide(R, self.output_tensor)
-		"""
-		w_w, h_w, _, _ = shape(self.weights); w_w, h_w = int(w_w), int(h_w)
-		padding = np.array([[0,0], [w_w-1, w_w-1], [h_w-1, h_w-1], [0,0]])
-		R_per_act = tf.pad(R_per_act_, padding)
-
-		wT = tf.einsum('ijkl->jilk', self.weights)
-		R_per_in_act = self.conv2d(R_per_act, wT)
-		R_out = tf.multiply(self.input_tensor, R_per_in_act)
-		"""
-		input_shape = shape(self.input_tensor)
-		print("Input shape: ", input_shape, type(input_shape))
-		R_per_in_act = tf.nn.conv2d_transpose(R_per_act_, self.weights, input_shape, strides=[1,1,1,1], padding="VALID")
-		print("R_per_in_act", R_per_in_act.shape); input()
-		R_out = tf.multiply(self.input_tensor, R_per_in_act)
+		R_per_act = tf.divide(R, self.activators)
+		R_per_in_act = tf.gradients(self.activators, self.input_tensor, grad_ys=R_per_act)[0]
+		print("Grad: ", R_per_in_act); input()
+		R_out = tf.multiply(R_per_in_act, self.input_tensor)
+		print(type(self), ": input_tensor: ", shape(self.input_tensor), "R_out: ", shape(R_out)); input()
 		self.R_simple = R_out 
 		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
 		return R_out
-
-	def gradprop(self,DY,W):
-		mb,wy,hy,ny = DY.shape
-		ww,hw,nx,ny = W.shape
-		DX = self.input_tensor*0
-		for i in range(ww):
-			for j in range(hw):
-				W_ = tf.transpose(W[i,j,:,:])
-				DX[:,i:i+wy,j:j+hy,:] += tf.tensordot(DY, W_, axes=1)
-		return DX
 
 class NextConvolution(Convolution):
 	def __init__(self, *args, **kwargs):
