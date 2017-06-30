@@ -57,6 +57,13 @@ class ReLU:
 
 	def relprop(self,R): return R
 
+class Abs:
+	def forward(self,X):
+		self.A = numpy.abs(X)
+		return self.A
+
+	def relprop(self,R): return R
+
 # -------------------------
 # Fully-connected layer
 # -------------------------

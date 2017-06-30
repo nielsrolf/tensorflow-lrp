@@ -144,13 +144,13 @@ class Network():
 		print("Relevance - Sum(heatmap) = ", err)
 
 	def simple_test(self, fdict):
-		Conservation = [l.conservation for l in self.layers[::-1][1:] if isinstance(l, Linear)]
-		Activator_share = [l.activator_share for l in self.layers[::-1][1:] if isinstance(l, Linear)]
-		Activators_ = [l.activators_ for l in self.layers[::-1][1:] if isinstance(l, Linear)]
+		Conservation = [l.conservation for l in self.layers[::-1][1:] if isinstance(l, (Linear, Convolution, Pooling))]
+		Layerwise_R = [l.R_simple for l in self.layers[::-1][1:] if isinstance(l, (Linear, Convolution, Pooling))]
+		test_layers = [l for l in self.layers[::-1][1:] if isinstance(l, (Linear, Convolution, Pooling))]
+		conservation, layerwise_r = self.sess.run([Conservation, Layerwise_R], feed_dict=fdict)
 
-		conservation, activator_share, activators_ = self.sess.run([Conservation, Activator_share, Activators_], feed_dict=fdict)
-
-		for c, s, a_ in zip(conservation, activator_share, activators_):
+		for c, r, l in zip(conservation, layerwise_r, test_layers):
+			print(type(l))
 			print("Conservation :", c)
 			#print("share.sum(axis=1) :", np.sum(s, axis=1))
 			input()
@@ -188,7 +188,7 @@ class Layer():
 # -------------------------
 # Format Layer
 # -------------------------
-class Format(Layer): # use only in tf network
+class Format(Layer):
 	def forward(self, input_tensor):
 		self.input_tensor = input_tensor
 		self.output_tensor = tf.add(input_tensor*(utils.highest-utils.lowest), utils.lowest)
@@ -197,23 +197,43 @@ class Format(Layer): # use only in tf network
 	def to_numpy(self):
 		return modules.Format()
 
+class Flatten(Layer):
+	def forward(self, input_tensor):
+		self.input_tensor = input_tensor
+		print("Flat neurons: ", np.prod(shape(input_tensor)[1:]))
+		self.output_tensor = tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
+		return self.output_tensor
 # -------------------------
-# ReLU Layer
+# Activation Layers
 # -------------------------
-class ReLU(Layer):
+class Activation(Layer):
+	def deep_taylor(self, R): return R
+	def simple_lrp(self, R): return R
+	def alphabeta_lrp(self, R, alpha=1.): return R
+
+class ReLU(Activation):
 	def forward(self, input_tensor):
 		self.input_tensor = input_tensor
 		self.output_tensor = tf.nn.relu(input_tensor)
 		return self.output_tensor
 
-	def deep_taylor(self, R): return R
-
-	def simple_lrp(self, R): return R
-
-	def alphabeta_lrp(self, R, alpha=1.): return R
-
 	def to_numpy(self):
 		return modules.ReLU()
+
+class Tanh(Activation):
+	def forward(self, input_tensor):
+		self.input_tensor = input_tensor
+		self.output_tensor = tf.nn.tanh(input_tensor)
+		return self.output_tensor
+
+class Abs(Activation):
+	def forward(self, input_tensor):
+		self.input_tensor = input_tensor
+		self.output_tensor = tf.abs(input_tensor)
+		return self.output_tensor
+
+	def to_numpy(self):
+		return modules.Abs()
 
 # -------------------------
 # Fully-connected layer
@@ -262,7 +282,8 @@ class Linear(Layer):
 		R_out_ = tf.multiply(R_, activator_share)		#[None, i, j]: R_in[j]/a_[,i,j]
 		R_out = tf.reduce_sum(R_out_, axis=2)
 
-		#self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		self.R_simple = R_out
+		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
 		return R_out
 
 	def alphabeta_lrp(self, R, alpha=1.):
@@ -368,10 +389,12 @@ class Pooling(Layer):
 		return output_tensor
 
 	def simple_lrp(self, R):
-		R = R.reshape(self.output_tensor.shape)
+		R = tf.reshape(R, shape(self.output_tensor))
 		activators_ = tf.einsum('ijkl,jkmn->ijkmnl', self.input_tensor, self.weights)
-		R_per_act = tf.divide(R, self.output_tensor)  #imnl
+		R_per_act = tf.divide(R, self.output_tensor+1e-9)  #imnl
 		R_out = tf.einsum('ijkmnl,imnl->ijkl', activators_, R_per_act)
+		self.R_simple = R_out 
+		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
 		return R_out
 
 	def alphabeta_lrp(self, R, alpha=1.):
@@ -417,13 +440,49 @@ class Convolution(Layer):
 		self.output_tensor = self.conv2d(self.input_tensor, self.weights) + self.biases
 		return self.output_tensor
 
+	"""
+	def to_dense(self):
+		input_flat = tf.reshape(self.input_tensor, [-1, np.prod(shape(self.input_tensor)[1:])])
+		dense_layer = Linear(np.prod(shape(self.output_tensor)[1:]))
+	"""	
+
+	def _simple_lrp(self, R):
+		R = tf.reshape(R, shape(self.output_tensor))
+
+		w_w, h_w, _, _ = shape(self.weights); w_w, h_w = int(w_w), int(h_w)
+		padding = np.array([[0,0], [w_w-1, w_w-1], [h_w-1, h_w-1], [0,0]])
+		R_ = tf.pad(R, padding)
+
+		wT = tf.einsum('ijkl->jilk', self.weights)
+		normalizer = tf.einsum('jilk->jik', wT)
+		wT_normal = tf.divide(wT, tf.expand_dims(normalizer, axis=2))
+		R_per_in_act = self.conv2d(R_, wT_normal)
+		R_out = tf.multiply(self.input_tensor, R_per_in_act)
+		
+		self.R_simple = R_out 
+		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return R_out
+
 	def simple_lrp(self, R):
 		R = tf.reshape(R, shape(self.output_tensor))
-		w, h, c_in, c_out = shape(self.weights)
-		reverse_weights = # [w, h, c_out, c_in]
+		R_per_act_ = tf.divide(R, self.output_tensor)
+		"""
+		w_w, h_w, _, _ = shape(self.weights); w_w, h_w = int(w_w), int(h_w)
+		padding = np.array([[0,0], [w_w-1, w_w-1], [h_w-1, h_w-1], [0,0]])
+		R_per_act = tf.pad(R_per_act_, padding)
 
-		R_out = self.conv2d(R, reverse_weights)
-		pass
+		wT = tf.einsum('ijkl->jilk', self.weights)
+		R_per_in_act = self.conv2d(R_per_act, wT)
+		R_out = tf.multiply(self.input_tensor, R_per_in_act)
+		"""
+		input_shape = shape(self.input_tensor)
+		print("Input shape: ", input_shape, type(input_shape))
+		R_per_in_act = tf.nn.conv2d_transpose(R_per_act_, self.weights, input_shape, strides=[1,1,1,1], padding="VALID")
+		print("R_per_in_act", R_per_in_act.shape); input()
+		R_out = tf.multiply(self.input_tensor, R_per_in_act)
+		self.R_simple = R_out 
+		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return R_out
 
 	def gradprop(self,DY,W):
 		mb,wy,hy,ny = DY.shape

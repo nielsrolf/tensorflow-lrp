@@ -89,5 +89,10 @@ Network has a member function ´heatmaps(self, X)´
 - Loss function and optimizer (Network.__init__())
 - If input has to be reshaped for FirstConvolutional, then the spatial dimension of the input is [28*n, 28]. This suits, if you give concatinated mnist images as input
 
+## Further restrictions, which take more effort to edit
+- Pooling layer is sum pooling
+- Pooling Layer and Convolutional Layer don't add any padding. I think the best way to change that is to implement a padding layer, so that the LRP stuff of those two layers doesn't need to be touched.
+
+
 ## Coding Conventions
 In the tensorflow Network, every layer has an ´input_tensor´ and an ´output_tensor´. The ´input_tensor´ contains the actual input (output of previous layer) and formatting (e.g. reshaping). ´input_tensor.eval()´ should suit as input for numpylayer.forward()

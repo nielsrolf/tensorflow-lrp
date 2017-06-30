@@ -39,5 +39,3 @@ def visualize(x,colormap,name):
 	x = numpy.kron(x,numpy.ones([2,2,1]))
 
 	PIL.Image.fromarray((x*255).astype('byte'),'RGB').save(name)
-
-
