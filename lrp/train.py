@@ -439,6 +439,8 @@ class Pooling(Layer):
 		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
 		return R_out
 
+	def deep_taylor(self, R): return self.alphabeta_lrp(R, 1.)
+
 	def to_numpy(self):
 		return modules.Pooling()
 
@@ -520,12 +522,7 @@ class NextConvolution(Convolution):
 		self.lrp_module = modules.NextConvolution
 
 	def deep_taylor(self, R):
-		W_plus = tf.nn.relu(self.weights)
-		Z = tf.nn.conv2d(self.input_tensor, W_plus, [1, 1, 1, 1], padding="VALID")+1e-9
-		S = tf.divide(R, Z)
-		C = self.gradprop(S, W_plus)
-		R_out = tf.divide(self.input_tensor, Z)
-		return R_out
+		return self.alphabeta_lrp(R, alpha=1.)
 	
 class FirstConvolution(Convolution):
 	def __init__(self, *args, **kwargs):
@@ -540,12 +537,17 @@ class FirstConvolution(Convolution):
 			input_tensor = tf.reshape(input_tensor, [-1, int(h), 28, 1])
 		return super().forward(input_tensor)
 
+	def gradprop(self, DY, W):
+		Y = self.conv2d(self.input_tensor, W)
+		return tf.gradients(Y, self.input_tensor, DY)[0]
+
 	def deep_taylor(self, R):
 		W_plus = tf.nn.relu(self.weights)
 		W_minus = -tf.nn.relu(-self.weights)
 		X,L,H = self.input_tensor,self.input_tensor*0+utils.lowest,self.input_tensor*0+utils.highest
 		Z = self.conv2d(X, self.weights)-self.conv2d(L, W_plus)-self.conv2d(H, W_minus)+1e-09
 		S = tf.divide(R, Z)
+
 		R_out = X*self.gradprop(S, self.weights)-L*self.gradprop(S, W_plus)-H*self.gradprop(S, W_minus)
 		return R_out
 

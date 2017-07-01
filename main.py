@@ -20,8 +20,9 @@ def cnn_test():
 
 	# Get a tensor that calculates deeptaylor explanation for the correct class
 	#R_simple = cnn.mixed_lrp(y_, "simple")
-	R_ab = cnn.mixed_lrp(y_, ["ab", 1.])
-	#R_deeptaylor = cnn.deep_taylor(y_)
+	R_ab = cnn.mixed_lrp(y_, ["ab", 2.])
+	R_deeptaylor = cnn.deep_taylor(y_)
+	print("deeptaylor: ", shape(R_deeptaylor)); input()
 
 	# instanciate network by creating a session
 	sess = cnn.create_session()
@@ -46,7 +47,7 @@ def cnn_test():
 	x, T = mnist.train.next_batch(10)
 	feed_dict = cnn.feed_dict([x, T])
 
-	
+	"""
 	# Forwarding tests:
 	# test if numpy and tensorflow networks are identical
 	cnn.layerwise_tfnp_test(x, T)
@@ -59,12 +60,13 @@ def cnn_test():
 	# use it
 	np_y = npcnn.forward(x)
 	print("Max error: ",np.absolute(np_y-cnn_y).max())
+	"""
 	
 
 	# LRP Testing
 	# simple lrp with tensorflow
 	#cnn.simple_test(feed_dict)
-	cnn.ab_test(feed_dict); input()
+	#cnn.ab_test(feed_dict)
 
 	y, heatmaps = sess.run([cnn.y, R_ab], feed_dict=feed_dict)
 	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/ab_lrp.png")
@@ -74,16 +76,10 @@ def cnn_test():
 	utils.visualize(x, utils.heatmap, "cooolcnn/x.png")
 	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/deeptaylor_np.png")
 
-	"""
 	# deeptaylor with tensorflow
 	heatmaps = sess.run(R_deeptaylor, feed_dict=feed_dict)
 	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/deeptaylor_tf.png")
-
-	# get deeptaylor with numpy implementation
-	heatmaps, _ = cnn.get_numpy_deeptaylor(x, T)
-	utils.visualize(x, utils.heatmap, "cooolcnn/x.png")
-	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/deeptaylor_np.png")
-	"""
+	
 	cnn.close_sess()
 
 #mlp_test()
