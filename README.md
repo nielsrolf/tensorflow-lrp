@@ -1,5 +1,16 @@
+# Main features
+- Define convolutional neural networks and multilayer perceptrons
+- Train, save and load the networks
+- Explain their decisions with one of the following LRP methods:
+	- Simple
+	- Alphabeta
+	- Deep Taylor
+- Visualize filters of the first convolutional layer 
+- Export the network to a (numpy implementation)[http://www.heatmapping.org/tutorial/], which is used as reference for testing
+
 With this modul you can define, train, save and load neural network, and use various LRP explaining techniques.
 All of this is possible with tensorflow as backenend, and the network can be exported to an identical network with numpy as backend. The numpy implementation only has limited features though, namely forwarding and deep taylor LRP.
+
 
 ## Use
 
