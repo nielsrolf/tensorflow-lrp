@@ -68,7 +68,7 @@ class Network():
 		Methods: which method to use?
 				If the same method should be used for every layer, then the string can be passed: ("simple" / "ab")
 				If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
-				If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param)]
+				If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
 		"""
 
 		R = tf.multiply(self.y, class_filter)

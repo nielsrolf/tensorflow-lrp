@@ -1,7 +1,9 @@
 With this modul you can define, train, save and load neural network, and use various LRP explaining techniques.
-All of this is possible with tensorflow as backenend, and the tensorflow network can be exported to a identical network with numpy as backend. The numpy implementation only has limited features though, namely forwarding and deep taylor LRP.
+All of this is possible with tensorflow as backenend, and the network can be exported to an identical network with numpy as backend. The numpy implementation only has limited features though, namely forwarding and deep taylor LRP.
 
 ## Use
+
+There are some examples in examples.py, which should be mostly self explaining.
 
 Define some input:
 Currently some preformatting layer is hardcoded, which assumes the input is in range [0,1] and shall be scretched to range [utils.lowest, utils.highest].
@@ -75,15 +77,29 @@ This module allows to define, train and load neural networks with some restricte
 - Network := Convolutional Layer + Next Linear Layers | Linear Layers
 - Convolutional Layers := FirstConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
 - NextConvolutional Layers := NextConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
-- Linear Layers := FirstLinear (+ Next Linear Layers)
-- Next Linear Layers := NextLinar (+ Next Linear Layers)
+- Linear Layers := FirstLinear (+ReLU) (+ Next Linear Layers)
+- Next Linear Layers := NextLinar (+ReLU) (+ Next Linear Layers)
 
 The loss function is hardcoded in train.py and per default set to:
 loss: cross_entropy(sigmoid(y), y_)
 optimizer: Adam
 
 ## LRP Calculation:
-Network has a member function ´heatmaps(self, X)´
+The function `Network.mixed_lrp(self, class_filter, methods = "simple")` returns a tensor of the same shape as the networks input, which can be used to generate heatmaps. You can specify which class to explain via `class_filter` (eg `y_` for the correct class), and which technique to use. You can also specify a method for each layer. Here is the explanation from the function definition:
+
+```
+	def mixed_lrp(self, class_filter, methods = "simple"): # class_filter: tf.constant one hot-vector
+		"""
+		Methods: which method to use?
+				If the same method should be used for every layer, then the string can be passed: ("simple" / "ab")
+				If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
+				If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
+		"""
+
+``` 
+
+## Filter Visualization
+There is another file `filter_visualizer.py` which has nothing to do with LRP, but can visualize the filters learned of the first convolutional layer. In that file there is are some examples, and there is a linear perceptron implemented in two ways, namely as one-layer FC Nńetwork without nonlinearity and as one Layer CNN with filter-size=input-size, and 10 output channels. The visualization shows that they are indeed the same.
 
 ## Hardcoded restrictions, which you are encouraged to edit:
 - Loss function and optimizer (Network.__init__())
