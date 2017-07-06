@@ -19,14 +19,6 @@ def expand_dims(A, axes=[]):
 		A = tf.expand_dims(A, axis=axis)
 	return A
 
-def tensordot(A, B, axes):
-	# Because tf.tensordot fucks with the shape
-	new_len = len(shape(A))+len(shape(B))-axes
-	A_ = expand_dims(A, axes=range(len(shape(A)),new_len))
-	B_ = expand_dims(B, axes=range(new_len-len(shape(B))))
-	reduce_axis = list(range(len(shape(A))-axes, len(shape(A))))
-	return tf.reduce_sum(tf.multiply(A_, B_), axis=reduce_axis)
-
 # -------------------------
 # Network
 # -------------------------
@@ -52,50 +44,70 @@ class Network():
 		self.train = tf.train.AdamOptimizer().minimize(self.loss)
 		self.saver = tf.train.Saver()
 
-	def deep_taylor(self, class_filter): # class_filter: tf.constant one hot-vector
-		R = tf.multiply(self.y, class_filter)
-		print("DEEP TAYLOR *_*")
-		print(R.get_shape().as_list())
-			
-		for l in self.layers[::-1][:-1]:
-			print(type(l))
-			R = l.deep_taylor(R)
-			print(" -> ", R.get_shape().as_list())
-		return R
-
-	def mixed_lrp(self, class_filter, methods = "simple"): # class_filter: tf.constant one hot-vector
+	def lrp(self, class_filter, methods = "simple"):
 		"""
-		Methods: which method to use?
-				If the same method should be used for every layer, then the string can be passed: ("simple" / "ab")
-				If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
-				If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
+		Gets:
+			class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
+			Methods: which method to use? Same meaning as in layerwise_lrp
+		Returns:
+			R: input layers relevance tensor
+		"""
+		Rs, _= self.layerwise_lrp(class_filter, methods)
+		return Rs[0]
+
+	def layerwise_lrp(self, class_filter, methods = "simple"): # class_filter: tf.constant one hot-vector
+		"""
+		Gets:
+			class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
+			Methods: which method to use?
+					If the same method should be used for every layer, then the string can be passed: ("simple" / "ab")
+					If one of the following standard method combinations shall be used, also pass the string code:
+						"zbab" -> zb - rule for the first layer, after that ab-rule with alpha=2.
+						"wwab" -> ww - rule for the first layer, after that ab-rule with alpha=2.
+					If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
+					If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
+		Returns:
+			R_layerwise: list of relevance tensors, one for each layer, so that R[0] is in input-space and R[-1] is in readout-layer space
 		"""
 
 		R = tf.multiply(self.y, class_filter)
 		print("\nLayerwise Relevance Propagation <3")
-		if isinstance(methods, str):
+		if methods=="zbab":
+			methods = [["zb"]] + [["ab", 2.]]*(len(self.layers)-2)
+		elif methods=="wwab":
+			methods = [["ww"]] + [["ab", 2.]]*(len(self.layers)-2)
+		elif isinstance(methods, str):
 			methods = [[methods]] * (len(self.layers)-1)
-		if isinstance(methods[1], (float, int)):
+		elif isinstance(methods[1], (float, int)):
 			methods = [methods] * (len(self.layers)-1)
+
+		R_layerwise = [R]
+		Conservation_layerwise = [1.]
 
 		for l, m in zip(self.layers[::-1][:-1], methods[::-1]):
 			print(type(l), ": ", m)
 			if m[0] == "deep_taylor":
-				R = l.deep_taylor(R)
+				R, C = l.deep_taylor(R)
 			elif m[0] == "simple":
-				R = l.simple_lrp(R)
+				R, C = l.simple_lrp(R)
 			elif m[0] == "ab" or m[0] == "alphabeta":
 				if len(m)>1:
-					R = l.alphabeta_lrp(R, m[1])
+					R, C = l.alphabeta_lrp(R, m[1])
 				else:
-					R = l.alphabeta_lrp(R)
+					R, C = l.alphabeta_lrp(R)
 			elif m[0] == "simpleb":
-				R = l.simple_lrp(R)
+				R, C = l.simple_lrp(R)
 			elif m[0] == "abb" or m[0] == "alphabeta":
-				R = l.alphabeta_lrp(R, m[1])
+				R, C = l.alphabeta_lrp(R, m[1])
+			elif m[0] == "zb":
+				R, C = l.zB_lrp(R)
+			elif  m[0] == "ww":
+				R, C = l.ww_lrp(R)
 			else:
 				raise Exception("Unknown LRP method: {}".format(m[0]))
-		return R	
+			R_layerwise = [R] + R_layerwise
+			Conservation_layerwise = [C] + Conservation_layerwise
+		return R_layerwise, Conservation_layerwise
 
 	def save_params(self, export_dir):
 		tf.gfile.MakeDirs(export_dir)
@@ -126,19 +138,6 @@ class Network():
 		for layer in self.layers:
 			lrp_layers.append(layer.to_numpy())
 		return modules.Network(lrp_layers)
-
-	def __lrp_forward(self, X):
-		lrp_network = self.to_numpy()
-		activation_tensors = [layer.input_tensor for layer in self.layers[1:]] + [self.layers[-1].output_tensor] # actiovation[0] is formated input, serves as input for layer 0 of numpy network
-		activation = self.sess.run(activation_tensors, feed_dict={self.input_tensor: X})
-		for i in range(len(self.layers)-1):
-			np_activation = np.reshape(lrp_network.layers[i].forward(activation[i]), activation[i+1].shape) # np forwards the tf activation, so a defect early layer will be detected, but the later layers can still pass the test
-		return lrp_network, np_activation
-
-	def __get_numpy_deeptaylor(self, X, dim): # dim: one hot vector; heatmaps for correct class: dim = y_
-		# X: either np.array or tf.Tensor
-		lrp_network, y = self.lrp_forward(X)
-		return lrp_network.relprop(y*dim), y*dim
 
 	def get_numpy_deeptaylor(self, X, dim): # dim: one hot vector; heatmaps for correct class: dim = y_
 		# X: either np.array or tf.Tensor
@@ -284,8 +283,7 @@ class Linear(Layer):
 		R_out_ = tf.multiply(R_, activator_share)		#[None, i, j]: R_in[j]/a_[,i,j]
 		R_out = tf.reduce_sum(R_out_, axis=2)
 
-		#self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 	def simple_lrp(self, R):
 		R = tf.reshape(R, shape(self.output_tensor))
@@ -293,32 +291,15 @@ class Linear(Layer):
 		R_per_in_act = tf.gradients(self.activators, self.input_tensor, grad_ys=R_per_act)[0]
 		R_out = tf.multiply(R_per_in_act, self.input_tensor)
 		self.R_simple = R_out
-		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
-		return R_out
-
-	def simple_lrp_(self, R):
-		# calculate activators = input_tensor*weights, but also each summand
-		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.expand_dims(self.weights, axis=0)
-		activators_ = tf.multiply(input_, weights_) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
-		activators = tf.reduce_sum(activators_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
-		# normalize a_ axis 1
-		activator_share = tf.divide(activators_, tf.expand_dims(activators, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
-		R_ = tf.expand_dims(R, axis=1) #[None, 1, j]: input relevance j
-		R_out_ = tf.multiply(R_, activator_share)		#[None, i, j]: R_in[j]/a_[,i,j]
-		R_out = tf.reduce_sum(R_out_, axis=2)
-
-		self.R_simple = R_out
-		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 	def alphabeta_lrp(self, R, alpha=1.):
 		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
 		weights_ = tf.expand_dims(self.weights, axis=0)
 		activators_ = tf.multiply(input_, weights_) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
 		
-		activators_plus_ = tf.nn.relu(activators_)
-		activators_plus = tf.reduce_sum(activators_plus_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
+		activators_plus_ = tf.nn.relu(activators_) + 1e-9
+		activators_plus = tf.reduce_sum(activators_plus_, axis=1) -1e-9 #[i,j] -> input[i].dot(weights[:,h])
 		# normalize a_ axis 1
 		activators_plus_share = tf.divide(activators_plus_, tf.expand_dims(activators_plus, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
 		R_ = tf.expand_dims(R, axis=1)
@@ -333,11 +314,9 @@ class Linear(Layer):
 		R_minus_out = tf.reduce_sum(R_minus_out_, axis=2)
 
 		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 	def alphabeta_lrp_bias(self, R, alpha=1.):
-		def shape(T): return [-1 if d is None else d for d in T.get_shape().as_list()]
-
 		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
 		weights_ = tf.expand_dims(self.weights, axis=0)
 		activators_ = tf.multiply(input_, weights_) + tf.divide(tf.expand_dims(self.biases, axis=0), shape(input_)[1]) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
@@ -358,7 +337,17 @@ class Linear(Layer):
 		R_minus_out = tf.reduce_sum(R_minus_out_, axis=2)
 
 		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+
+	def zB_lrp(self, R):
+		self.R_in = R
+		W,V,U = self.weights, tf.maximum(0.,self.weights), tf.minimum(0.,self.weights)
+		X,L,H = self.input_tensor, self.input_tensor*0 + utils.lowest, self.input_tensor*0 + utils.highest
+
+		Z = tf.matmul(X,W)-tf.matmul(L,V)-tf.matmul(H,U)+1e-9
+		S = tf.divide(R,Z)
+		self.R_out = X*tf.matmul(S,tf.transpose(W))-tf.multiply(L,tf.matmul(S,tf.transpose(V))) - tf.multiply(H, tf.matmul(S,tf.transpose(U)))
+		return self.R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 class NextLinear(Linear):
 	def __init__(self, *args, **kwargs):
@@ -372,7 +361,7 @@ class NextLinear(Linear):
 		S = tf.divide(R, Z)
 		C = tf.matmul(S, tf.transpose(V))
 		self.R_out = tf.multiply(self.input_tensor, C)
-		return self.R_out
+		return self.R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 class FirstLinear(Linear):
 	def __init__(self, *args, **kwargs):
@@ -380,14 +369,7 @@ class FirstLinear(Linear):
 		self.lrp_module = modules.FirstLinear
 
 	def deep_taylor(self, R):
-		self.R_in = R
-		W,V,U = self.weights, tf.maximum(0.,self.weights), tf.minimum(0.,self.weights)
-		X,L,H = self.input_tensor, self.input_tensor*0 + utils.lowest, self.input_tensor*0 + utils.highest
-
-		Z = tf.matmul(X,W)-tf.matmul(L,V)-tf.matmul(H,U)+1e-9
-		S = tf.divide(R,Z)
-		self.R_out = X*tf.matmul(S,tf.transpose(W))-tf.multiply(L,tf.matmul(S,tf.transpose(V))) - tf.multiply(H, tf.matmul(S,tf.transpose(U)))
-		return self.R_out
+		return self.zB_lrp(R)
 
 # -------------------------
 # Sum-pooling layer
@@ -422,12 +404,11 @@ class Pooling(Layer):
 		R_per_act = tf.divide(R, output_tensor+1e-9)
 		R_per_in_act = tf.gradients(output_tensor, input_tensor, grad_ys=R_per_act)[0]
 		R_out = tf.multiply(R_per_in_act, input_tensor)
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 	def simple_lrp(self, R):
-		self.R_simple = self._simple_lrp(R, self.input_tensor)
-		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(self.R_simple)
-		return self.R_simple
+		R_out = self._simple_lrp(R, self.input_tensor)
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 	def alphabeta_lrp(self, R, alpha=1.):
 		input_plus = tf.nn.relu(self.input_tensor)
@@ -437,23 +418,12 @@ class Pooling(Layer):
 		R_minus_out = self._simple_lrp(R, input_minus)
 
 		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 	def deep_taylor(self, R): return self.alphabeta_lrp(R, 1.)
 
 	def to_numpy(self):
 		return modules.Pooling()
-
-	"""
-	def simple_lrp(self, R):
-		R = tf.reshape(R, shape(self.output_tensor))
-		activators_ = tf.einsum('ijkl,jkmn->ijkmnl', self.input_tensor, self.weights)
-		R_per_act = tf.divide(R, self.output_tensor+1e-9)  #imnl
-		R_out = tf.einsum('ijkmnl,imnl->ijkl', activators_, R_per_act)
-		self.R_simple = R_out 
-		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
-		return R_out
-	"""
 
 # -------------------------
 # Convolution layer
@@ -468,6 +438,12 @@ class Convolution(Layer):
 		return tf.nn.conv2d(X, W, [1, 1, 1, 1], padding="VALID")
 
 	def forward(self, input_tensor):
+		input_shape = input_tensor.get_shape().as_list()
+		if len(input_shape) < 4:
+			h = np.prod(input_shape[1])/28
+			print("Convolutional layer: reshape to height:", h)
+			input_tensor = tf.reshape(input_tensor, [-1, int(h), 28, 1])
+
 		self.input_tensor = input_tensor
 		_, dx1, dx2, channels_x = input_tensor.get_shape().as_list()
 		self.weights = weight_variable(self.w_shape)
@@ -487,7 +463,7 @@ class Convolution(Layer):
 		R_out = self._simple_lrp(R, self.activators, self.weights, self.input_tensor)
 		self.R_simple = R_out 
 		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
 
 	def alphabeta_lrp(self, R, alpha=1.):
 		# Split activators into + and -
@@ -513,7 +489,24 @@ class Convolution(Layer):
 			+ (1.-alpha)*(self._simple_lrp(R_minus1, a_minus1, w_minus, input_minus)
 			+ self._simple_lrp(R_minus2, a_minus2, w_minus, input_minus) ))	
 
-		return R_out
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+
+	def gradprop(self, DY, W):
+		Y = self.conv2d(self.input_tensor, W)
+		return tf.gradients(Y, self.input_tensor, DY)[0]
+
+	def zB_lrp(self, R):
+		W_plus = tf.nn.relu(self.weights)
+		W_minus = -tf.nn.relu(-self.weights)
+		X,L,H = self.input_tensor,self.input_tensor*0+utils.lowest,self.input_tensor*0+utils.highest
+		Z = self.conv2d(X, self.weights)-self.conv2d(L, W_plus)-self.conv2d(H, W_minus)+1e-09
+		S = tf.divide(R, Z)
+
+		R_out = X*self.gradprop(S, self.weights)-L*self.gradprop(S, W_plus)-H*self.gradprop(S, W_minus)
+		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+
+	def ww_lrp(self, R):
+		raise NotImplementedError()
 
 
 class NextConvolution(Convolution):
@@ -529,26 +522,7 @@ class FirstConvolution(Convolution):
 		super().__init__(*args, **kwargs)
 		self.lrp_module = modules.FirstConvolution
 
-	def forward(self, input_tensor):
-		input_shape = input_tensor.get_shape().as_list()
-		if len(input_shape) < 4:
-			h = np.prod(input_shape[1])/28
-			print("FirstConvolution: reshape to height:", h)
-			input_tensor = tf.reshape(input_tensor, [-1, int(h), 28, 1])
-		return super().forward(input_tensor)
-
-	def gradprop(self, DY, W):
-		Y = self.conv2d(self.input_tensor, W)
-		return tf.gradients(Y, self.input_tensor, DY)[0]
-
 	def deep_taylor(self, R):
-		W_plus = tf.nn.relu(self.weights)
-		W_minus = -tf.nn.relu(-self.weights)
-		X,L,H = self.input_tensor,self.input_tensor*0+utils.lowest,self.input_tensor*0+utils.highest
-		Z = self.conv2d(X, self.weights)-self.conv2d(L, W_plus)-self.conv2d(H, W_minus)+1e-09
-		S = tf.divide(R, Z)
-
-		R_out = X*self.gradprop(S, self.weights)-L*self.gradprop(S, W_plus)-H*self.gradprop(S, W_minus)
-		return R_out
+		return self.zB_lrp(R)
 
 	

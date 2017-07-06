@@ -1,3 +1,12 @@
+# Todo:
+	- implement cn like memory cheap simple/ab rule for linear layers
+	- implement w^2 rule
+	- add epsilon in correct way to ab rule
+	
+	- Max Pooling Layer 
+	- Padding Layers 
+	- Variable Strides for CN layers
+
 # Main features
 - Define convolutional neural networks and multilayer perceptrons
 - Train, save and load the networks
@@ -86,25 +95,44 @@ If you implemented a new relevance propagation rule, you can check the conservat
 This module allows to define, train and load neural networks with some restricted architectures:
 
 - Network := Convolutional Layer + Next Linear Layers | Linear Layers
-- Convolutional Layers := FirstConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
-- NextConvolutional Layers := NextConvolutional ( + ReLU + Pooling) (+ Next Convolutional Layers)
-- Linear Layers := FirstLinear (+ReLU) (+ Next Linear Layers)
-- Next Linear Layers := NextLinar (+ReLU) (+ Next Linear Layers)
+- Convolutional Layers := FirstConvolutional ( + Activation + Pooling) (+ Next Convolutional Layers) | (Convolutional ( + Activation + Pooling))*
+- NextConvolutional Layers := NextConvolutional ( + Activation + Pooling) (+ Next Convolutional Layers)
+- Linear Layers := FirstLinear (+Activation) (+ Next Linear Layers) | (Linear (+ Activation))*
+- Next Linear Layers := NextLinar (+Activation) (+ Next Linear Layers)
+
+You don't need to use First- and Next- Linear/Convolutional Layer, but it sets some default settings: you can then use "deeptaylor" as LRP method, which will be translated to zB-rule in the first layer and alphabeta-rule with alpha=1 in the upper layers. It is also necessary if for testing purpose the tf network shall be exported to the numpy network from the tutorial. For training, forwarding, and layerwise specified LRP it is not necessary.
 
 The loss function is hardcoded in train.py and per default set to:
 loss: cross_entropy(sigmoid(y), y_)
 optimizer: Adam
 
 ## LRP Calculation:
-The function `Network.mixed_lrp(self, class_filter, methods = "simple")` returns a tensor of the same shape as the networks input, which can be used to generate heatmaps. You can specify which class to explain via `class_filter` (eg `y_` for the correct class), and which technique to use. You can also specify a method for each layer. Here is the explanation from the function definition:
+The functions `Network.lrp(self, class_filter, methods = "simple")` and `Network.layerwise_lrp(self, class_filter, methods = "simple")`  can be used to generate heatmaps. They are explained in the source code:
 
 ```
-	def mixed_lrp(self, class_filter, methods = "simple"): # class_filter: tf.constant one hot-vector
+	def lrp(self, class_filter, methods = "simple"):
 		"""
-		Methods: which method to use?
-				If the same method should be used for every layer, then the string can be passed: ("simple" / "ab")
-				If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
-				If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
+		Gets:
+			class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
+			Methods: which method to use? Same meaning as in layerwise_lrp
+		Returns:
+			R: input layers relevance tensor
+		"""
+		...
+
+	def layerwise_lrp(self, class_filter, methods = "simple"): # class_filter: tf.constant one hot-vector
+		"""
+		Gets:
+			class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
+			Methods: which method to use?
+					If the same method should be used for every layer, then the string can be passed: ("simple" / "ab")
+					If one of the following standard method combinations shall be used, also pass the string code:
+						"zbab" -> zb - rule for the first layer, after that ab-rule with alpha=2.
+						"wwab" -> ww - rule for the first layer, after that ab-rule with alpha=2.
+					If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
+					If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
+		Returns:
+			R_layerwise: list of relevance tensors, one for each layer, so that R[0] is in input-space and R[-1] is in readout-layer space
 		"""
 
 ``` 
@@ -122,4 +150,4 @@ There is another file `filter_visualizer.py` which has nothing to do with LRP, b
 
 
 ## Coding Conventions
-In the tensorflow Network, every layer has an ´input_tensor´ and an ´output_tensor´. The ´input_tensor´ contains the actual input (output of previous layer) and formatting (e.g. reshaping). ´input_tensor.eval()´ should suit as input for numpylayer.forward()
+In the tensorflow Network, every layer has an ´input_tensor´ and an ´output_tensor´. The ´input_tensor´ contains the input (output of previous layer) after formatting (e.g. reshaping).

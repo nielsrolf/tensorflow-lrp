@@ -21,6 +21,7 @@ def cnn_test():
 	# Get a tensor that calculates deeptaylor explanation for the correct class
 	#R_simple = cnn.mixed_lrp(y_, "simple")
 	R_ab = cnn.mixed_lrp(y_, ["ab", 2.])
+	R_zbab = cnn.mixed_lrp(y_, "zbab")
 	R_deeptaylor = cnn.deep_taylor(y_)
 	print("deeptaylor: ", shape(R_deeptaylor)); input()
 
@@ -70,7 +71,11 @@ def cnn_test():
 
 	y, heatmaps = sess.run([cnn.y, R_ab], feed_dict=feed_dict)
 	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/ab_lrp.png")
-	print("Sum(h) / R = ", np.sum(heatmaps[0]), "/", np.sum((y*T)[0]))
+	print("Sum(h) / R = ", np.sum(heatmaps), "/", np.sum((y*T)))
+
+	y, heatmaps = sess.run([cnn.y, R_zbab], feed_dict=feed_dict)
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/zbab_lrp.png")
+	print("Sum(h) / R = ", np.sum(heatmaps), "/", np.sum((y*T)))
 
 	heatmaps, r = cnn.get_numpy_deeptaylor(x, T)
 	utils.visualize(x, utils.heatmap, "cooolcnn/x.png")
