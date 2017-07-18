@@ -7,7 +7,45 @@ highest = 1.0
 # Color maps ([-1,1] -> [0,1]^3)
 # --------------------------------------
 
+def heatmap_1(x):
+	x = x[...,numpy.newaxis]
+	plus = numpy.clip(x, 0, 1)
+	minus = numpy.clip(x, -1, 0)*(-1)
+	neutral = 1 - plus - minus
+	print("Minus elem [{}, {}]".format(numpy.amin(minus), numpy.amax(minus)))
+	
+	s = 0.5
+
+	r = plus
+	y = neutral*s
+	w = neutral*(1-s)
+	b = minus
+
+	r = 1-minus #numpy.clip(r+y + w, 0, 1) # r+y+w = plus + neutral = plus + 1 - plus - minus ) 1 - minus
+	g = 1-plus-minus#y + w 
+	b = 1-s + s*minus -(1-s)*plus #minus+(1-s)*(1-plus-minus) #b + w
+	for f in [r,g,b]:
+		print("color range: ", numpy.amin(f), numpy.amax(f))
+
+	return numpy.concatenate([r,g,b],axis=-1)
+
 def heatmap(x):
+
+	x = x[...,numpy.newaxis]
+	
+	r, g, b = 1., 1., 1.
+	max_b = 0.3
+	max_r = 0.7
+	# positive relevance
+	plus = numpy.clip(x, 0., max_r)/max_r
+	minus = numpy.clip(-x, 0., max_b)/max_b
+	r -= minus 
+	g = g - minus - plus
+	b -= plus
+
+	return numpy.concatenate([r,g,b],axis=-1)
+
+def heatmap_(x):
 
 	x = x[...,numpy.newaxis]
 
@@ -27,7 +65,7 @@ def graymap(x):
 # --------------------------------------
 
 def visualize(x,colormap,name):
-
+	print("Visualize", name)
 	N = len(x); assert(N<=16)
 
 	x = colormap(x/(numpy.abs(x).max()+1e-09))

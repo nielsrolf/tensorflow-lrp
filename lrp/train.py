@@ -4,8 +4,6 @@ import numpy as np
 import tensorflow as tf
 
 def weight_variable(shape):
-	try: s = shape[0].as_list(); shape = s[1:] + shape[1:]
-	except: pass
 	return tf.Variable(tf.truncated_normal(shape, stddev=0.1))
 
 def bias_variable(shape): return tf.Variable(tf.constant(0.1, shape=shape))
@@ -24,16 +22,17 @@ def expand_dims(A, axes=[]):
 # -------------------------
 class Network():
 	def __init__(self, layers, input_tensor, y_):
-		self.layers = layers
+		self.format_layer = layers[0]
+		self.layers = layers[1:]
 		self.input_tensor = input_tensor
 		self.y_ = y_
 		self.session = None
 
 		# forward through every layer
 		activation = input_tensor
-		print("Network layer mappings:", activation.shape)
 
-		for layer in self.layers:
+		print("Network layer mappings:", activation.shape)
+		for layer in layers:
 			activation = layer.forward(activation)
 			print("->", activation.shape)
 
@@ -73,20 +72,20 @@ class Network():
 		R = tf.multiply(self.y, class_filter)
 		print("\nLayerwise Relevance Propagation <3")
 		if methods=="zbab":
-			methods = [["zb"]] + [["ab", 2.]]*(len(self.layers)-2)
+			methods = [["zb"]] + [["ab", 2.]]*(len(self.layers)-1)
 		elif methods=="wwab":
-			methods = [["ww"]] + [["ab", 2.]]*(len(self.layers)-2)
+			methods = [["ww"]] + [["ab", 2.]]*(len(self.layers)-1)
 		elif isinstance(methods, str):
-			methods = [[methods]] * (len(self.layers)-1)
+			methods = [[methods]] * len(self.layers)
 		elif isinstance(methods[1], (float, int)):
-			methods = [methods] * (len(self.layers)-1)
+			methods = [methods] * len(self.layers)
 
 		R_layerwise = [R]
-		Conservation_layerwise = [1.]
+		Conservation_layerwise = [None]
 
-		for l, m in zip(self.layers[::-1][:-1], methods[::-1]):
-			print(type(l), ": ", m)
-			if m[0] == "deep_taylor":
+		for l, m in zip(self.layers[::-1], methods[::-1]):
+			backward_mapping = str(shape(R)) + " -> "
+			if m[0] == "deep_taylor" or  m[0] == "deeptaylor":
 				R, C = l.deep_taylor(R)
 			elif m[0] == "simple":
 				R, C = l.simple_lrp(R)
@@ -105,9 +104,30 @@ class Network():
 				R, C = l.ww_lrp(R)
 			else:
 				raise Exception("Unknown LRP method: {}".format(m[0]))
+			backward_mapping += str(shape(R))
+			print(type(l), ": ", m, ":", backward_mapping)
 			R_layerwise = [R] + R_layerwise
 			Conservation_layerwise = [C] + Conservation_layerwise
 		return R_layerwise, Conservation_layerwise
+
+	def layerwise_conservation_test(self, R_layerwise, Conservation_layerwise, feed_dict):
+		if self.sess is None: raise Exception("Network.layerwise_conservation_test must be called while Network.session is set")
+		print("\n")
+		r_in = R_layerwise[-1]
+		for i_, (l, C, R) in enumerate(zip(self.layers[::-1], Conservation_layerwise[:-1][::-1], R_layerwise[:-1][::-1])):
+			i = len(self.layers)-1 - i_
+			c, input_array, output_array, r = self.sess.run([C, l.input_tensor, l.output_tensor, R], feed_dict=feed_dict)
+			print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
+			print("		Forward:", shape(input_array), " -> ", shape(output_array))
+			print("		Backward", shape(r), " <- ", shape(r_in))
+			print("R_out = ", np.sum(r))
+
+	def layerwise_conservation_test_(self, R_layerwise, Conservation_layerwise, feed_dict):
+		if self.sess is None: raise Exception("Network.layerwise_conservation_test must be called while Network.session is set")
+		r_in = self.layers[-1]
+		conservation_layerwise = self.sess.run(Conservation_layerwise, feed_dict=feed_dict)
+		for i, (l, c) in enumerate(zip(self.layers+["filtered forwarded readout layer = Relevance input layer"], conservation_layerwise)):
+			print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
 
 	def save_params(self, export_dir):
 		tf.gfile.MakeDirs(export_dir)
@@ -135,7 +155,7 @@ class Network():
 	def to_numpy(self):	
 		# extract Parameters, and return a modules.network
 		lrp_layers = []
-		for layer in self.layers:
+		for layer in [self.format_layer] + self.layers:
 			lrp_layers.append(layer.to_numpy())
 		return modules.Network(lrp_layers)
 
@@ -154,18 +174,6 @@ class Network():
 		err = np.absolute(hR-R)
 		print("Relevance - Sum(heatmap) = ", err)
 
-	def simple_test(self, feed_dict):
-		Conservation = [l.conservation for l in self.layers[::-1][1:] if isinstance(l, (Linear, Convolution, Pooling))]
-		Layerwise_R = [l.R_simple for l in self.layers[::-1][1:] if isinstance(l, (Linear, Convolution, Pooling))]
-		test_layers = [l for l in self.layers[::-1][1:] if isinstance(l, (Linear, Convolution, Pooling))]
-		conservation, layerwise_r = self.sess.run([Conservation, Layerwise_R], feed_dict=feed_dict)
-
-		for c, r, l in zip(conservation, layerwise_r, test_layers):
-			print(type(l))
-			print("Conservation :", c)
-			#print("share.sum(axis=1) :", np.sum(s, axis=1))
-			input()
-
 	def ab_test(self, feed_dict):
 		ab_errors = self.sess.run([l.ab_forward_error for l in self.layers if isinstance(l, Convolution)], feed_dict=feed_dict)
 		for error in ab_errors:
@@ -175,7 +183,7 @@ class Network():
 		np_nn = self.to_numpy()
 		cnn_layer_tensors = [layer.output_tensor for layer in self.layers]
 		cnn_layer_activations = self.sess.run(cnn_layer_tensors, feed_dict=self.feed_dict([X, T]))
-		a = X
+		a = self.format_layer.forward(X)
 		for l, a_ in zip(np_nn.layers, cnn_layer_activations):
 			a = l.forward(a)
 			np.testing.assert_allclose(a, a_, atol=1e-5)
@@ -218,14 +226,18 @@ class Flatten(Layer):
 		self.input_tensor = input_tensor
 		self.output_tensor = tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
 		return self.output_tensor
+	def lrp(self, R): return R, tf.constant(1.)
+	def deep_taylor(self, R): return self.lrp(R)
+	def simple_lrp(self, R): return self.lrp(R)
+	def alphabeta_lrp(self, R, alpha=1.): return self.lrp(R)
 
 # -------------------------
 # Activation Layers
 # -------------------------
 class Activation(Layer):
-	def deep_taylor(self, R): return R
-	def simple_lrp(self, R): return R
-	def alphabeta_lrp(self, R, alpha=1.): return R
+	def deep_taylor(self, R): return R, tf.constant(1.)
+	def simple_lrp(self, R): return R, tf.constant(1.)
+	def alphabeta_lrp(self, R, alpha=1.): return R, tf.constant(1.)
 
 class ReLU(Activation):
 	def forward(self, input_tensor):
@@ -252,92 +264,94 @@ class Abs(Activation):
 		return modules.Abs()
 
 # -------------------------
-# Fully-connected layer
+# Abstract Layer with weights
 # -------------------------
-class Linear(Layer):
-	def __init__(self, num_neurons):
-		super().__init__()
-		self.output_dims = num_neurons
-
+class AbstractLayerWithWeights(Layer):
+	"""
+	Handles forwarding and _simple_lrp based stuff. Child classes must set the following in __init___
+	- self.get_w_shape()
+	- self.bias_shape
+	- self.linear_operation(input_tensor, weights)
+	"""
 	def forward(self, input_tensor):
-		input_shape = input_tensor.get_shape().as_list()
-		if len(input_shape) == 4:
-			input_shape = [-1, np.prod(input_shape[1:])]
-			input_tensor = tf.reshape(input_tensor, input_shape)
-		self.input_tensor = input_tensor
-		self.weights = weight_variable([input_tensor.shape, self.output_dims])
-		self.biases = bias_variable([self.output_dims])
-		self.activators = tf.matmul(self.input_tensor, self.weights)
+		self.input_tensor = self.input_reshape(input_tensor)
+		self.weights = weight_variable(self.get_w_shape(self.input_tensor))
+		self.biases = bias_variable(self.bias_shape)
+		self.activators = self.linear_operation(self.input_tensor, self.weights)
 		self.output_tensor = self.activators + self.biases
 		return self.output_tensor
 
-	def simple_bias_lrp(self, R):
-		# calculate activators = input_tensor*weights, but also each summand
-		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.expand_dims(self.weights, axis=0)
-		activators_ = tf.multiply(input_, weights_) + tf.divide(tf.expand_dims(self.biases, axis=0), shape(input_)[1]) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
-		activators = tf.reduce_sum(activators_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
-		# normalize a_ axis 1
-		activator_share = tf.divide(activators_, tf.expand_dims(activators, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
-		R_ = tf.expand_dims(R, axis=1) #[None, 1, j]: input relevance j
-		R_out_ = tf.multiply(R_, activator_share)		#[None, i, j]: R_in[j]/a_[,i,j]
-		R_out = tf.reduce_sum(R_out_, axis=2)
-
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+	def _simple_lrp(self, R, weights, input_tensor):
+		activators = self.linear_operation(input_tensor, weights)
+		R = tf.reshape(R, shape(activators))
+		R_per_act = tf.divide(R, activators)
+		R_per_in_act = tf.gradients(activators, input_tensor, grad_ys=R_per_act)[0]
+		R_out = tf.multiply(R_per_in_act, input_tensor)
+		return R_out#R_per_in_act#R_out
 
 	def simple_lrp(self, R):
-		R = tf.reshape(R, shape(self.output_tensor))
-		R_per_act = tf.divide(R, self.activators+1e-9)
-		R_per_in_act = tf.gradients(self.activators, self.input_tensor, grad_ys=R_per_act)[0]
-		R_out = tf.multiply(R_per_in_act, self.input_tensor)
-		self.R_simple = R_out
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		R_out = self._simple_lrp(R, self.weights, self.input_tensor)
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
 	def alphabeta_lrp(self, R, alpha=1.):
-		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.expand_dims(self.weights, axis=0)
-		activators_ = tf.multiply(input_, weights_) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
-		
-		activators_plus_ = tf.nn.relu(activators_) + 1e-9
-		activators_plus = tf.reduce_sum(activators_plus_, axis=1) -1e-9 #[i,j] -> input[i].dot(weights[:,h])
-		# normalize a_ axis 1
-		activators_plus_share = tf.divide(activators_plus_, tf.expand_dims(activators_plus, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
-		R_ = tf.expand_dims(R, axis=1)
-		R_plus_out_ = tf.multiply(R_, activators_plus_share)		#[None, i, j]: R_in[j]/a_[,i,j]
-		R_plus_out = tf.reduce_sum(R_plus_out_, axis=2)
+		# WARNING works only if input_tensor is positive
+		input_tensor = self.input_tensor + 1e-9
+		w_plus = tf.nn.relu(self.weights) +1e-9
+		w_minus = tf.nn.relu(-self.weights) +1e-9
+		R_out_plus = self._simple_lrp(R, w_plus, input_tensor)
+		R_out_minus = self._simple_lrp(R, w_minus, input_tensor)
+		R_out = alpha* R_out_plus + (1.-alpha)*R_out_minus
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
-		activators_minus_ = tf.nn.relu(-activators_)
-		activators_minus = tf.reduce_sum(activators_minus_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
-		# normalize a_ axis 1
-		activators_minus_share = tf.divide(activators_minus_, tf.expand_dims(activators_minus, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
-		R_minus_out_ = tf.multiply(R_, activators_minus_share)		#[None, i, j]: R_in[j]/a_[,i,j]
-		R_minus_out = tf.reduce_sum(R_minus_out_, axis=2)
+	def alphabeta_lrp_(self, R, alpha=1.):
+		# Split activators into + and -
+		input_plus = tf.nn.relu(self.input_tensor) +1e-9
+		input_minus = tf.nn.relu(-self.input_tensor) +1e-9
+		w_plus = tf.nn.relu(self.weights) +1e-9
+		w_minus = tf.nn.relu(-self.weights) +1e-9
 
-		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		a_plus1 = self.linear_operation(input_plus, w_plus)
+		a_plus2 = self.linear_operation(input_minus, w_minus)
+		a_minus1 = self.linear_operation(input_plus, w_minus)
+		a_minus2 = self.linear_operation(input_minus, w_plus)
+		# the following can be used to check if activator decomposition holds:
+		#self.ab_forward_error = tf.divide(self.activators - (a_plus1+a_plus2 - (a_minus1+a_minus2)), self.activators)
 
-	def alphabeta_lrp_bias(self, R, alpha=1.):
-		input_ = tf.reshape(self.input_tensor, shape(self.input_tensor)+[1])
-		weights_ = tf.expand_dims(self.weights, axis=0)
-		activators_ = tf.multiply(input_, weights_) + tf.divide(tf.expand_dims(self.biases, axis=0), shape(input_)[1]) #shape: [batch_size, input_dims, output_dims] | [i,j,h] -> input[i,j]*weights[j,h]
-		
-		activators_plus_ = tf.nn.relu(activators_)
-		activators_plus = tf.reduce_sum(activators_plus_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
-		# normalize a_ axis 1
-		activators_plus_share = tf.divide(activators_plus_, tf.expand_dims(activators_plus, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
-		R_ = tf.expand_dims(R, axis=1)
-		R_plus_out_ = tf.multiply(R_, activators_plus_share)		#[None, i, j]: R_in[j]/a_[,i,j]
-		R_plus_out = tf.reduce_sum(R_plus_out_, axis=2)
+		R_plus1 = tf.multiply(R, tf.divide(a_plus1, a_plus1+a_plus2))
+		R_plus2 = tf.multiply(R, tf.divide(a_plus2, a_plus1+a_plus2))
+		R_minus1 = tf.multiply(R, tf.divide(a_minus1, a_minus1+a_minus2))
+		R_minus2 = tf.multiply(R, tf.divide(a_minus2, a_minus1+a_minus2))
 
-		activators_minus_ = tf.nn.relu(-activators_)
-		activators_minus = tf.reduce_sum(activators_minus_, axis=1) #[i,j] -> input[i].dot(weights[:,h])
-		# normalize a_ axis 1
-		activators_minus_share = tf.divide(activators_minus_, tf.expand_dims(activators_minus, axis=1)) #-> [i,j,h] -> input[i,j]*weights[j,h]/input[i].dot(weights[:,h])
-		R_minus_out_ = tf.multiply(R_, activators_minus_share)		#[None, i, j]: R_in[j]/a_[,i,j]
-		R_minus_out = tf.reduce_sum(R_minus_out_, axis=2)
+		R_out_plus = self._simple_lrp(R_plus1, w_plus, input_plus) + self._simple_lrp(R_plus2, w_minus, input_minus)
+		R_out_minus = self._simple_lrp(R_minus1, w_minus, input_plus) + self._simple_lrp(R_minus2, w_plus, input_minus)
 
-		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		R_out = alpha* R_out_plus + (1.-alpha)*R_out_minus
+		#R_out = R_out_minus
+
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
+
+# -------------------------
+# Fully-connected layer
+# -------------------------
+class Linear(AbstractLayerWithWeights):
+	def __init__(self, num_neurons):
+		super().__init__()
+		self.linear_operation = tf.matmul
+		self.output_dims = num_neurons
+
+		def input_reshape(input_tensor):
+			input_shape = input_tensor.get_shape().as_list()
+			if len(input_shape) == 4:
+				input_shape = [-1, np.prod(input_shape[1:])]
+				input_tensor = tf.reshape(input_tensor, input_shape)
+			return input_tensor	
+		self.input_reshape=input_reshape
+		self.bias_shape = [self.output_dims]
+
+		def get_w_shape(input_tensor):
+			print("get w shape: input:", input_tensor)
+			return  [shape(input_tensor)[-1], num_neurons]
+		self.get_w_shape = get_w_shape#lambda input_tensor : [shape(input_tensor)[-1], num_neurons]
 
 	def zB_lrp(self, R):
 		self.R_in = R
@@ -347,7 +361,7 @@ class Linear(Layer):
 		Z = tf.matmul(X,W)-tf.matmul(L,V)-tf.matmul(H,U)+1e-9
 		S = tf.divide(R,Z)
 		self.R_out = X*tf.matmul(S,tf.transpose(W))-tf.multiply(L,tf.matmul(S,tf.transpose(V))) - tf.multiply(H, tf.matmul(S,tf.transpose(U)))
-		return self.R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return self.R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
 class NextLinear(Linear):
 	def __init__(self, *args, **kwargs):
@@ -360,8 +374,8 @@ class NextLinear(Linear):
 		Z = tf.matmul(self.input_tensor, V) + 1e-9
 		S = tf.divide(R, Z)
 		C = tf.matmul(S, tf.transpose(V))
-		self.R_out = tf.multiply(self.input_tensor, C)
-		return self.R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		R_out = tf.multiply(self.input_tensor, C)
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
 class FirstLinear(Linear):
 	def __init__(self, *args, **kwargs):
@@ -382,35 +396,27 @@ class Pooling(Layer):
 		self.input_tensor = input_tensor
 		# alternative implementation for:
 		output_tensor = tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2,2])*2
-		# using the form output = tensordor(input, weights)
-		"""
-		_, h, w, c = self.input_tensor.shape
-		h, w, c = int(h), int(w), int(c)
-		weights = np.zeros([h, w, int(h/2), int(w/2)], dtype=np.float32)
-		for i,j in [[0,0], [0,1], [1,0], [1,1]]:
-			for h_ in range(int(h/2)):
-				for w_ in range(int(w/2)):
-					weights[i+2*h_,j+2*w_,h_,w_] = 0.5
-		self.weights = tf.constant(weights)
-		output_tensor = tf.einsum('ijkl,jkmn->imnl', self.input_tensor, self.weights)
-		print(shape(output_tensor))
-		"""
 		self.output_tensor = output_tensor
 		return output_tensor
 
 	def _simple_lrp(self, R, input_tensor):
+		input_tensor += 1e-9
 		output_tensor = tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2,2])*2
 		R = tf.reshape(R, shape(output_tensor))
-		R_per_act = tf.divide(R, output_tensor+1e-9)
+		R_per_act = tf.divide(R, output_tensor)
 		R_per_in_act = tf.gradients(output_tensor, input_tensor, grad_ys=R_per_act)[0]
 		R_out = tf.multiply(R_per_in_act, input_tensor)
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return R_out
 
 	def simple_lrp(self, R):
 		R_out = self._simple_lrp(R, self.input_tensor)
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
 	def alphabeta_lrp(self, R, alpha=1.):
+		R_out = self._simple_lrp(R, self.input_tensor)
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
+
+	def alphabeta_lrp_(self, R, alpha=1.):
 		input_plus = tf.nn.relu(self.input_tensor)
 		input_minus = tf.nn.relu(-self.input_tensor)
 
@@ -418,7 +424,7 @@ class Pooling(Layer):
 		R_minus_out = self._simple_lrp(R, input_minus)
 
 		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
 	def deep_taylor(self, R): return self.alphabeta_lrp(R, 1.)
 
@@ -428,86 +434,43 @@ class Pooling(Layer):
 # -------------------------
 # Convolution layer
 # -------------------------
-class Convolution(Layer):
+class Convolution(AbstractLayerWithWeights):
+	"""
+	Inherits _simple_lrp based methods, which use self.linear_operation
+	"""
 	def __init__(self, w_shape):
 		self.w_shape = w_shape
+		self.linear_operation = lambda input_tensor, weights: tf.nn.conv2d(input_tensor, weights, [1, 1, 1, 1], padding="VALID")
+		def input_reshape(input_tensor):
+			input_shape = input_tensor.get_shape().as_list()
+			if len(input_shape) < 4:
+				h = np.prod(input_shape[1])/28
+				print("Convolutional layer: reshape to height:", h)
+				input_tensor = tf.reshape(input_tensor, [-1, int(h), 28, 1])
+			return input_tensor
+		self.input_reshape = input_reshape
+		self.bias_shape = [1, 1, 1, self.w_shape[-1]]
+		self.get_w_shape = lambda input_tensor: self.w_shape
+
 		if len(w_shape) != 4:
 			raise Exception("Convolutional Layer: w has to be of rank 4, but is {}. Maybe add None as batch_size dim".format(len(w_shape)))
 
-	def conv2d(self, X, W):
-		return tf.nn.conv2d(X, W, [1, 1, 1, 1], padding="VALID")
-
-	def forward(self, input_tensor):
-		input_shape = input_tensor.get_shape().as_list()
-		if len(input_shape) < 4:
-			h = np.prod(input_shape[1])/28
-			print("Convolutional layer: reshape to height:", h)
-			input_tensor = tf.reshape(input_tensor, [-1, int(h), 28, 1])
-
-		self.input_tensor = input_tensor
-		_, dx1, dx2, channels_x = input_tensor.get_shape().as_list()
-		self.weights = weight_variable(self.w_shape)
-		self.biases = bias_variable([1, 1, 1, self.w_shape[-1]])
-		self.activators = self.conv2d(self.input_tensor, self.weights)
-		self.output_tensor = self.activators + self.biases
-		return self.output_tensor
-
-	def _simple_lrp(self, R, activators, weights, input_tensor):
-		R = tf.reshape(R, shape(activators))
-		R_per_act = tf.divide(R, activators+1e-9)
-		R_per_in_act = tf.gradients(activators, self.input_tensor, grad_ys=R_per_act)[0]
-		R_out = tf.multiply(R_per_in_act, input_tensor)
-		return R_out
-
-	def simple_lrp(self, R):
-		R_out = self._simple_lrp(R, self.activators, self.weights, self.input_tensor)
-		self.R_simple = R_out 
-		self.conservation = tf.reduce_sum(R) / tf.reduce_sum(R_out)
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
-
-	def alphabeta_lrp(self, R, alpha=1.):
-		# Split activators into + and -
-		input_plus = tf.nn.relu(self.input_tensor)
-		input_minus = tf.nn.relu(-self.input_tensor)
-		w_plus = tf.nn.relu(self.weights)
-		w_minus = tf.nn.relu(-self.weights)
-
-		a_plus1 = self.conv2d(input_plus, w_plus)
-		a_plus2 = self.conv2d(input_minus, w_minus)
-		a_minus1 = self.conv2d(input_plus, w_minus)
-		a_minus2 = self.conv2d(input_minus, w_plus)
-		# check if activator decomposition holds:
-		self.ab_forward_error = tf.divide(self.activators - (a_plus1+a_plus2 - (a_minus1+a_minus2)), self.activators)
-
-		R_plus1 = tf.multiply(R, tf.divide(a_plus1, a_plus1+a_plus2))
-		R_plus2 = tf.multiply(R, tf.divide(a_plus2, a_plus1+a_plus2))
-		R_minus1 = tf.multiply(R, tf.divide(a_minus1, a_minus1+a_minus2))
-		R_minus2 = tf.multiply(R, tf.divide(a_minus2, a_minus1+a_minus2))
-
-		R_out = (alpha*(self._simple_lrp(R_plus1, a_plus1, w_plus, input_plus)
-			+ self._simple_lrp(R_plus2, a_plus2, w_plus, input_plus) )
-			+ (1.-alpha)*(self._simple_lrp(R_minus1, a_minus1, w_minus, input_minus)
-			+ self._simple_lrp(R_minus2, a_minus2, w_minus, input_minus) ))	
-
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
-
 	def gradprop(self, DY, W):
-		Y = self.conv2d(self.input_tensor, W)
+		Y = self.linear_operation(self.input_tensor, W)
 		return tf.gradients(Y, self.input_tensor, DY)[0]
 
 	def zB_lrp(self, R):
 		W_plus = tf.nn.relu(self.weights)
 		W_minus = -tf.nn.relu(-self.weights)
 		X,L,H = self.input_tensor,self.input_tensor*0+utils.lowest,self.input_tensor*0+utils.highest
-		Z = self.conv2d(X, self.weights)-self.conv2d(L, W_plus)-self.conv2d(H, W_minus)+1e-09
+		Z = self.linear_operation(X, self.weights)-self.linear_operation(L, W_plus)-self.linear_operation(H, W_minus)+1e-09
 		S = tf.divide(R, Z)
 
 		R_out = X*self.gradprop(S, self.weights)-L*self.gradprop(S, W_plus)-H*self.gradprop(S, W_minus)
-		return R_out, tf.reduce_sum(R) / tf.reduce_sum(R_out)
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
 	def ww_lrp(self, R):
 		raise NotImplementedError()
-
 
 class NextConvolution(Convolution):
 	def __init__(self, *args, **kwargs):
