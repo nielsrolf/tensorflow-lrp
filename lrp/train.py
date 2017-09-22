@@ -269,6 +269,7 @@ class Abs(Activation):
 class AbstractLayerWithWeights(Layer):
 	"""
 	Handles forwarding and _simple_lrp based stuff. Child classes must set the following in __init___
+	- input_reshape(input_tensor)
 	- self.get_w_shape()
 	- self.bias_shape
 	- self.linear_operation(input_tensor, weights)
@@ -360,8 +361,8 @@ class Linear(AbstractLayerWithWeights):
 
 		Z = tf.matmul(X,W)-tf.matmul(L,V)-tf.matmul(H,U)+1e-9
 		S = tf.divide(R,Z)
-		self.R_out = X*tf.matmul(S,tf.transpose(W))-tf.multiply(L,tf.matmul(S,tf.transpose(V))) - tf.multiply(H, tf.matmul(S,tf.transpose(U)))
-		return self.R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
+		R_out = X*tf.matmul(S,tf.transpose(W))-tf.multiply(L,tf.matmul(S,tf.transpose(V))) - tf.multiply(H, tf.matmul(S,tf.transpose(U)))
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
 class NextLinear(Linear):
 	def __init__(self, *args, **kwargs):
@@ -369,7 +370,7 @@ class NextLinear(Linear):
 		self.lrp_module = modules.NextLinear
 
 	def deep_taylor(self, R):
-		self.R_in = R
+		self.R_in = tf.nn.relu(R)
 		V = tf.nn.relu(self.weights)
 		Z = tf.matmul(self.input_tensor, V) + 1e-9
 		S = tf.divide(R, Z)
@@ -383,17 +384,19 @@ class FirstLinear(Linear):
 		self.lrp_module = modules.FirstLinear
 
 	def deep_taylor(self, R):
-		return self.zB_lrp(R)
+		return self.zB_lrp(tf.nn.relu(R))
+
 
 # -------------------------
-# Sum-pooling layer
+# Abstract Layer without weights and biases, for Pooling, Padding
 # -------------------------
-class Pooling(Layer):
-	def forward(self, input_tensor):
-		input_shape = input_tensor.get_shape().as_list()[1:3]
-		if input_shape[0] % 2 + input_shape[1] % 2 > 0:
-			raise Exception("Input for pooling layer must have even spatial dims, but has "+str(input_shape))
-		self.input_tensor = input_tensor
+class AbstractLayerWithoutWB(Layer):
+	"""
+	Child class has to implement:
+	- self.linear_operation(input_tensor)
+	"""
+	def forward(self, input_tensor):		
+		self.input_tensor = self.input_reshape(input_tensor)
 		# alternative implementation for:
 		output_tensor = tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2,2])*2
 		self.output_tensor = output_tensor
@@ -401,7 +404,7 @@ class Pooling(Layer):
 
 	def _simple_lrp(self, R, input_tensor):
 		input_tensor += 1e-9
-		output_tensor = tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2,2])*2
+		output_tensor = self.linear_operation(input_tensor)
 		R = tf.reshape(R, shape(output_tensor))
 		R_per_act = tf.divide(R, output_tensor)
 		R_per_in_act = tf.gradients(output_tensor, input_tensor, grad_ys=R_per_act)[0]
@@ -416,20 +419,31 @@ class Pooling(Layer):
 		R_out = self._simple_lrp(R, self.input_tensor)
 		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
-	def alphabeta_lrp_(self, R, alpha=1.):
-		input_plus = tf.nn.relu(self.input_tensor)
-		input_minus = tf.nn.relu(-self.input_tensor)
+	def deep_taylor(self, R): return self.alphabeta_lrp(tf.nn.relu(R), 1.)
 
-		R_plus_out = self._simple_lrp(R, input_plus)
-		R_minus_out = self._simple_lrp(R, input_minus)
+# -------------------------
+# Pooling layers
+# -------------------------
 
-		R_out = alpha*R_plus_out + (1.-alpha)*R_minus_out
-		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
-
-	def deep_taylor(self, R): return self.alphabeta_lrp(R, 1.)
+class Pooling(AbstractLayerWithoutWB):
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		self.linear_operation = lambda input_tensor: tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2,2])*2
+		def input_reshape(input_tensor):
+			input_shape = input_tensor.get_shape().as_list()[1:3]
+			if input_shape[0] % 2 + input_shape[1] % 2 > 0:
+				raise Exception("Input for pooling layer must have even spatial dims, but has "+str(input_shape))
+			return input_tensor
+		self.input_reshape = input_reshape
 
 	def to_numpy(self):
 		return modules.Pooling()
+
+class MaxPooling(AbstractLayerWithoutWB):
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		self.linear_operation = lambda input_tensor: tf.nn.pool(input_tensor, [2, 2], "MAX", "SAME", strides=[2,2])
+		self.input_reshape = lambda input_tensor: input_tensor		
 
 # -------------------------
 # Convolution layer
@@ -478,7 +492,7 @@ class NextConvolution(Convolution):
 		self.lrp_module = modules.NextConvolution
 
 	def deep_taylor(self, R):
-		return self.alphabeta_lrp(R, alpha=1.)
+		return self.alphabeta_lrp(tf.nn.relu(R), alpha=1.)
 	
 class FirstConvolution(Convolution):
 	def __init__(self, *args, **kwargs):
@@ -486,6 +500,6 @@ class FirstConvolution(Convolution):
 		self.lrp_module = modules.FirstConvolution
 
 	def deep_taylor(self, R):
-		return self.zB_lrp(R)
+		return self.zB_lrp(tf.nn.relu(R))
 
 	

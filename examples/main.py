@@ -29,7 +29,7 @@ def cnn_test(architecture, param_path=None, train_new=False):
 	
 	if train_new:
 		# train the network for 200 train steps
-		for i in range(2000):
+		for i in range(1000):
 			acc, _ = sess.run([cnn.accuracy, cnn.train], feed_dict=cnn.feed_dict(mnist.train.next_batch(50)))
 			print(acc)
 		cnn.save_params(param_path)
@@ -42,44 +42,23 @@ def cnn_test(architecture, param_path=None, train_new=False):
 	# get a batch that we use for testing now
 	x, T = mnist.train.next_batch(10)
 	feed_dict = cnn.feed_dict([x, T])
-
-	"""
-	# Forwarding tests:
-	# test if numpy and tensorflow networks are identical
-	cnn.layerwise_tfnp_test(x, T)
-
-	# test again if numpy and tensorflow networks are identical:
-	# forward the same batch in tf network
-	cnn_y = sess.run(cnn.y, feed_dict=cnn.feed_dict([x, T]))
-	# get a networ with numpy backend
-	npcnn = cnn.to_numpy()
-	# use it
-	np_y = npcnn.forward(x)
-	print("Max error: ",np.absolute(np_y-cnn_y).max())
-	"""
 	
-
-	# LRP Testing
-	# simple lrp with tensorflow
-	#cnn.simple_test(feed_dict)
-	#cnn.ab_test(feed_dict)
-
 	y, heatmaps = sess.run([cnn.y, R_ab], feed_dict=feed_dict)
-	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/ab_lrp.png")
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/ab_lrp")
 	print("Sum(h) / R = ", np.sum(heatmaps), "/", np.sum((y*T)))
 
 	y, heatmaps = sess.run([cnn.y, R_zbab], feed_dict=feed_dict)
-	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/zbab_lrp.png")
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/zbab_lrp")
 	print("Sum(h) / R = ", np.sum(heatmaps), "/", np.sum((y*T)))
 	print("lowest:", np.amin(heatmaps))
 
 	y, heatmaps = sess.run([cnn.y, R_simple], feed_dict=feed_dict)
-	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/simple_lrp.png")
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/simple_lrp")
 	print("Sum(h) / R = ", np.sum(heatmaps), "/", np.sum((y*T)))
 
 	# deeptaylor with tensorflow
 	heatmaps = sess.run(R_deeptaylor, feed_dict=feed_dict)
-	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/deeptaylor_tf.png")
+	utils.visualize(heatmaps, utils.heatmap, "cooolcnn/deeptaylor_tf")
 	
 	cnn.close_sess()
 
@@ -110,5 +89,5 @@ def conservation_test(architecture, param_path):
 		nn.layerwise_conservation_test(R_layerwise, Conservation_layerwise, feed_dict)
 
 #mlp_test()
-cnn_test(models.cnn_3, "cnn_3", False)
+cnn_test(models.cnn_5, "cnn_5", False)
 #conservation_test(models.cnn_3, "cnn_3")

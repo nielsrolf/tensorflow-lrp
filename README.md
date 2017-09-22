@@ -1,11 +1,5 @@
 # Todo:
-	- implement cn like memory cheap simple/ab rule for linear layers
 	- implement w^2 rule
-	- add epsilon in correct way to ab rule
-	
-	- Max Pooling Layer 
-	- Padding Layers 
-	- Variable Strides for CN layers
 
 # Main features
 - Define convolutional neural networks and multilayer perceptrons
@@ -143,6 +137,7 @@ There is another file `filter_visualizer.py` which has nothing to do with LRP, b
 ## Hardcoded restrictions, which you are encouraged to edit:
 - Loss function and optimizer (Network.__init__())
 - If input has to be reshaped for FirstConvolutional, then the spatial dimension of the input is [28*n, 28]. This suits, if you give concatinated mnist images as input
+- Strides and padding of pooling layers are hardcoded in Pooling.__init__ and MaxPooling.__init__
 
 ## Further restrictions, which take more effort to edit
 - Pooling layer is sum pooling
