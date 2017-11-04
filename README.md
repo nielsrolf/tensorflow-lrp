@@ -1,6 +1,3 @@
-# Todo:
-	- implement w^2 rule
-
 # Main features
 - Define convolutional neural networks and multilayer perceptrons
 - Train, save and load the networks
