@@ -16,15 +16,25 @@ def soften(x, hardness=1.):
 		for dy in range(-1, 2):
 			if dx==dy and dy==0: continue
 			print(dx, dy)
-			s[:,max(0, dx):DX-max(0, -dx), max(0, dy):DY-max(0, -dy),:] += a[:,max(0, -dx):DX-max(0, dx), max(0, -dy):DY-max(0, dy),:]			
+			s[:,max(0, dx):DX-max(0, -dx), max(0, dy):DY-max(0, -dy),:] += a[:,max(0, -dx):DX-max(0, dx), max(0, -dy):DY-max(0, dy),:]
+			print("added ", np.sum(a))
+	print("Soften: c = ", np.sum(s)/np.sum(x))
+
+	print("s ", np.sum(s))
 	return s
+
+	"""
+	for i in range(6):
+		hardness = 0.5+i*0.1
+		h = lambda x: heatmap(x, hardness)
+		visualize_(x, h, name+"_"+str(hardness))
+	"""
 	
 # --------------------------------------
 # Color maps ([-1,1] -> [0,1]^3)
 # --------------------------------------
 
 def heatmap(x, num_soften=0):
-	return heatmap_1(x)
 	for i in range(num_soften):
 		x = soften(x, 0.8)
 

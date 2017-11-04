@@ -2,7 +2,28 @@ from . import modules
 from . import utils
 import numpy as np 
 import tensorflow as tf
+import uuid
+from .. import FLAGS
 
+import pdb
+
+# -------------------------
+# Stopping Criterion
+# -------------------------
+def gl(alpha, minimum=3000):
+	# returns a stopping criterion: train_step, val_accs -> boolean
+	def criterion(i, val_accs):
+		if len(val_accs)<=2: return True
+		if i<minimum: return True
+		opt = np.max(val_accs)
+		best_index = val_accs.index(opt)
+		if len(val_accs)-best_index >= 10 and len(val_accs) >= 1.5*best_index: return False
+		return (1-val_accs[-1])/(1-opt) <= 1. + alpha/100
+	return criterion
+
+# -------------------------
+# Vars and tf helpers
+# -------------------------
 def weight_variable(shape):
 	return tf.Variable(tf.truncated_normal(shape, stddev=0.1))
 
@@ -17,31 +38,63 @@ def expand_dims(A, axes=[]):
 		A = tf.expand_dims(A, axis=axis)
 	return A
 
+def normalize_batch(R):
+	rank = len(shape(R))
+	sum_axes = list(range(1, rank))
+	R_sum = tf.reduce_sum(R, axis=sum_axes) +1e-9 
+	R_norm = tf.divide(R, expand_dims(R_sum, axes=sum_axes))
+	return R_norm
+
+class namescope():
+	def __init__(self, name):
+		self.name=name
+	def __enter__(self):
+		self.tf_namescope = tf.name_scope(self.name)
+		self.tf_namescope.__enter__() if FLAGS.logging else None
+		return self.tf_namescope
+	def __exit__(self, *args): 
+		if FLAGS.logging: self.tf_namescope.__exit__(*args)
+
 # -------------------------
 # Network
 # -------------------------
 class Network():
-	def __init__(self, layers, input_tensor, y_):
+	def __init__(self, layers, input_tensor, y_, max_num_instances=10000000, logdir=".temp", loss=None):
 		self.format_layer = layers[0]
 		self.layers = layers[1:]
 		self.input_tensor = input_tensor
 		self.y_ = y_
 		self.session = None
+		self.real_layers = []
+		self.logdir = logdir
+		tf.gfile.MakeDirs(logdir)
 
 		# forward through every layer
-		activation = input_tensor
+		with namescope("format") as scope:
+			activation = self.format_layer.forward(input_tensor)
 
 		print("Network layer mappings:", activation.shape)
-		for layer in layers:
-			activation = layer.forward(activation)
+		for layer_id, layer in enumerate(self.layers):
+			with namescope(str(layer_id)+"-"+layer.__class__.__name__):
+				activation = layer.forward(activation)
 			print("->", activation.shape)
+			if not isinstance(layer, (Activation, Format, NoFormat, Flatten)):
+				self.real_layers.append(layer_id)
 
 		self.y = activation
+		self.sigmoid_y = tf.sigmoid(activation)
+		self.normalized_sigmoid = normalize_batch(self.sigmoid_y)
 
-		self.accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(self.y, 1), tf.argmax(self.y_, 1)), tf.float32))
-		self.loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.y_, logits=self.y)
+		if loss is None: self.loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=self.y_, logits=self.y))
+		else: self.loss = tf.reduce_mean(loss(self.y_, self.y))
+
+		if shape(self.y)[-1] == 1 and len(shape(self.y)) == 2:
+			self.accuracy = 1-self.loss
+		else:
+			self.accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(self.y, 1), tf.argmax(self.y_, 1)), tf.float32))
+
 		self.train = tf.train.AdamOptimizer().minimize(self.loss)
-		self.saver = tf.train.Saver()
+		self.saver = tf.train.Saver(max_to_keep=max_num_instances)
 
 	def lrp(self, class_filter, methods = "simple"):
 		"""
@@ -54,7 +107,7 @@ class Network():
 		Rs, _= self.layerwise_lrp(class_filter, methods)
 		return Rs[0]
 
-	def layerwise_lrp(self, class_filter, methods = "simple"): # class_filter: tf.constant one hot-vector
+	def layerwise_lrp(self, class_filter, methods = "simple", method_id=None, consistent=False): # class_filter: tf.constant one hot-vector
 		"""
 		Gets:
 			class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
@@ -65,11 +118,14 @@ class Network():
 						"wwab" -> ww - rule for the first layer, after that ab-rule with alpha=2.
 					If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
 					If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
+			method_id: an identifier for this stack
+			consistent: if True, negative relevance will be filtered out in readout layer
 		Returns:
 			R_layerwise: list of relevance tensors, one for each layer, so that R[0] is in input-space and R[-1] is in readout-layer space
 		"""
-
+		method_id = method_id if not method_id is None else str(uuid.uuid4())[:3]
 		R = tf.multiply(self.y, class_filter)
+		if methods == "deeptaylor" or consistent: R = tf.nn.relu(R)
 		print("\nLayerwise Relevance Propagation <3")
 		if methods=="zbab":
 			methods = [["zb"]] + [["ab", 2.]]*(len(self.layers)-1)
@@ -79,35 +135,37 @@ class Network():
 			methods = [[methods]] * len(self.layers)
 		elif isinstance(methods[1], (float, int)):
 			methods = [methods] * len(self.layers)
-
 		R_layerwise = [R]
 		Conservation_layerwise = [None]
-
-		for l, m in zip(self.layers[::-1], methods[::-1]):
-			backward_mapping = str(shape(R)) + " -> "
-			if m[0] == "deep_taylor" or  m[0] == "deeptaylor":
-				R, C = l.deep_taylor(R)
-			elif m[0] == "simple":
-				R, C = l.simple_lrp(R)
-			elif m[0] == "ab" or m[0] == "alphabeta":
-				if len(m)>1:
+		for l, m, layer_id in zip(self.layers[::-1], methods[::-1], list(range(len(self.layers)))[::-1]):
+			with namescope(str(layer_id)+"-"+l.__class__.__name__+"-"+m[0]+method_id):
+				backward_mapping = str(shape(R)) + " -> "
+				if m[0] == "deep_taylor" or  m[0] == "deeptaylor":
+					if layer_id > 0:
+						R, C = l.deep_taylor(R)
+					else:
+						R, C = self.format_layer.choose_deeptaylor(l, R)
+				elif m[0] == "simple":
+					R, C = l.simple_lrp(R)
+				elif m[0] == "ab" or m[0] == "alphabeta":
+					if len(m)>1:
+						R, C = l.alphabeta_lrp(R, m[1])
+					else:
+						R, C = l.alphabeta_lrp(R)
+				elif m[0] == "simpleb":
+					R, C = l.simple_lrp(R)
+				elif m[0] == "abb" or m[0] == "alphabeta":
 					R, C = l.alphabeta_lrp(R, m[1])
+				elif m[0] == "zb":
+					R, C = l.zB_lrp(R)
+				elif  m[0] == "ww":
+					R, C = l.ww_lrp(R)
 				else:
-					R, C = l.alphabeta_lrp(R)
-			elif m[0] == "simpleb":
-				R, C = l.simple_lrp(R)
-			elif m[0] == "abb" or m[0] == "alphabeta":
-				R, C = l.alphabeta_lrp(R, m[1])
-			elif m[0] == "zb":
-				R, C = l.zB_lrp(R)
-			elif  m[0] == "ww":
-				R, C = l.ww_lrp(R)
-			else:
-				raise Exception("Unknown LRP method: {}".format(m[0]))
-			backward_mapping += str(shape(R))
-			print(type(l), ": ", m, ":", backward_mapping)
-			R_layerwise = [R] + R_layerwise
-			Conservation_layerwise = [C] + Conservation_layerwise
+					raise Exception("Unknown LRP method: {}".format(m[0]))
+				backward_mapping += str(shape(R))
+				print(type(l), ": ", m, ":", backward_mapping)
+				R_layerwise = [R] + R_layerwise
+				Conservation_layerwise = [C] + Conservation_layerwise
 		return R_layerwise, Conservation_layerwise
 
 	def layerwise_conservation_test(self, R_layerwise, Conservation_layerwise, feed_dict):
@@ -135,7 +193,10 @@ class Network():
 		print("Saved model to ", save_path)
 
 	def load_params(self, import_dir):
+		if getattr(self, "sess", None) is None: self.create_session()
 		self.saver.restore(self.sess, "{}/model.ckpt".format(import_dir))
+
+	def reset_params(self): self.create_session()
 
 	def close_sess(self):
 		try: self.sess.close()
@@ -143,7 +204,9 @@ class Network():
 
 	def create_session(self):
 		self.close_sess()
+		summary = tf.summary.merge_all()
 		self.set_session(tf.Session())
+		summary_writer = tf.summary.FileWriter(self.logdir, self.sess.graph)		
 		self.sess.run(tf.global_variables_initializer())
 		return self.sess
 
@@ -218,13 +281,35 @@ class Format(Layer):
 		self.output_tensor = tf.add(input_tensor*(utils.highest-utils.lowest), utils.lowest)
 		return self.output_tensor
 
+	def choose_deeptaylor(self, layer, R):
+		return layer.zB_lrp(R)
+
 	def to_numpy(self):
 		return modules.Format()
+
+class NoFormat(Layer):
+	def forward(self, input_tensor):
+		self.input_tensor = input_tensor
+		self.output_tensor = input_tensor
+		return self.output_tensor
+
+	def choose_deeptaylor(self, layer, R):
+		return layer.ww_lrp(R)
 
 class Flatten(Layer):
 	def forward(self, input_tensor):
 		self.input_tensor = input_tensor
 		self.output_tensor = tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
+		return self.output_tensor
+	def lrp(self, R): return R, tf.constant(1.)
+	def deep_taylor(self, R): return self.lrp(R)
+	def simple_lrp(self, R): return self.lrp(R)
+	def alphabeta_lrp(self, R, alpha=1.): return self.lrp(R)
+
+class MNISTShape(Layer):
+	def forward(self, input_tensor):
+		self.input_tensor = input_tensor
+		self.output_tensor = tf.reshape(input_tensor, [-1, 28, 28, 1])
 		return self.output_tensor
 	def lrp(self, R): return R, tf.constant(1.)
 	def deep_taylor(self, R): return self.lrp(R)
@@ -264,7 +349,7 @@ class Abs(Activation):
 		return modules.Abs()
 
 # -------------------------
-# Abstract Layer with weights
+# Connected Layers
 # -------------------------
 class AbstractLayerWithWeights(Layer):
 	"""
@@ -285,7 +370,7 @@ class AbstractLayerWithWeights(Layer):
 	def _simple_lrp(self, R, weights, input_tensor):
 		activators = self.linear_operation(input_tensor, weights)
 		R = tf.reshape(R, shape(activators))
-		R_per_act = tf.divide(R, activators)
+		R_per_act = tf.divide(R, activators+1e-12)
 		R_per_in_act = tf.gradients(activators, input_tensor, grad_ys=R_per_act)[0]
 		R_out = tf.multiply(R_per_in_act, input_tensor)
 		return R_out#R_per_in_act#R_out
@@ -331,6 +416,16 @@ class AbstractLayerWithWeights(Layer):
 
 		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
+	def ww_lrp(self, R):
+		ww = tf.square(self.weights) + 1e-9
+		in_ones = tf.constant(np.ones([d if d >0 else 1 for d in shape(self.input_tensor)]), tf.float32)
+		t = self.linear_operation(
+			in_ones,
+			ww)
+		R_per_t = tf.divide(R, t)
+		R_out = tf.gradients(t, in_ones, grad_ys=R_per_t)[0]
+		return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
+
 # -------------------------
 # Fully-connected layer
 # -------------------------
@@ -350,7 +445,6 @@ class Linear(AbstractLayerWithWeights):
 		self.bias_shape = [self.output_dims]
 
 		def get_w_shape(input_tensor):
-			print("get w shape: input:", input_tensor)
 			return  [shape(input_tensor)[-1], num_neurons]
 		self.get_w_shape = get_w_shape#lambda input_tensor : [shape(input_tensor)[-1], num_neurons]
 
@@ -384,6 +478,7 @@ class FirstLinear(Linear):
 		self.lrp_module = modules.FirstLinear
 
 	def deep_taylor(self, R):
+		raise Warning("FirstLinear - deeptaylor: not sure which method to use, use zB-rule. If ww-rule is needed, please explicitly specify it")
 		return self.zB_lrp(tf.nn.relu(R))
 
 
@@ -452,9 +547,9 @@ class Convolution(AbstractLayerWithWeights):
 	"""
 	Inherits _simple_lrp based methods, which use self.linear_operation
 	"""
-	def __init__(self, w_shape):
+	def __init__(self, w_shape, padding="VALID"):
 		self.w_shape = w_shape
-		self.linear_operation = lambda input_tensor, weights: tf.nn.conv2d(input_tensor, weights, [1, 1, 1, 1], padding="VALID")
+		self.linear_operation = lambda input_tensor, weights: tf.nn.conv2d(input_tensor, weights, [1, 1, 1, 1], padding=padding)
 		def input_reshape(input_tensor):
 			input_shape = input_tensor.get_shape().as_list()
 			if len(input_shape) < 4:
