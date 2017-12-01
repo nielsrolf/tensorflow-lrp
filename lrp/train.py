@@ -3,7 +3,6 @@ from . import utils
 import numpy as np 
 import tensorflow as tf
 import uuid
-from .. import FLAGS
 
 import pdb
 
@@ -50,10 +49,11 @@ class namescope():
 		self.name=name
 	def __enter__(self):
 		self.tf_namescope = tf.name_scope(self.name)
-		self.tf_namescope.__enter__() if FLAGS.logging else None
+		self.tf_namescope.__enter__() # if FLAGS.logging else None
 		return self.tf_namescope
 	def __exit__(self, *args): 
-		if FLAGS.logging: self.tf_namescope.__exit__(*args)
+		#if FLAGS.logging: self.tf_namescope.__exit__(*args)
+		self.tf_namescope.__exit__(*args)
 
 # -------------------------
 # Network
@@ -95,6 +95,11 @@ class Network():
 
 		self.train = tf.train.AdamOptimizer().minimize(self.loss)
 		self.saver = tf.train.Saver(max_to_keep=max_num_instances)
+
+	def sensivity(self, class_filter):
+		# returns the gradient of class_filter.dot(readout)  wrt the pixel activation
+		target = tf.reduce_sum(tf.multiply(self.y, class_filter))
+		return tf.gradients(target, self.format_layer.output_tensor)
 
 	def lrp(self, class_filter, methods = "simple"):
 		"""
