@@ -214,7 +214,7 @@ class Network():
 		self.close_sess()
 		summary = tf.summary.merge_all()
 		self.set_session(tf.Session())
-		summary_writer = tf.summary.FileWriter(self.logdir, self.sess.graph)		
+		#summary_writer = tf.summary.FileWriter(self.logdir, self.sess.graph)		
 		self.sess.run(tf.global_variables_initializer())
 		return self.sess
 
