@@ -44,6 +44,9 @@ def normalize_batch(R):
 	R_norm = tf.divide(R, expand_dims(R_sum, axes=sum_axes))
 	return R_norm
 
+def flatten_batch(B):
+	return tf.reshape(B, [B.shape[0], np.prod(B.shape[1:])])
+
 class namescope():
 	def __init__(self, name):
 		self.name=name
@@ -198,7 +201,7 @@ class Network():
 		print("Saved model to ", save_path)
 
 	def load_params(self, import_dir):
-		if getattr(self, "sess", None) is None: self.create_session()
+		self.create_session()
 		self.saver.restore(self.sess, "{}/model.ckpt".format(import_dir))
 
 	def reset_params(self): self.create_session()
