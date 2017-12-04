@@ -76,11 +76,11 @@ class Network():
 		with namescope("format") as scope:
 			activation = self.format_layer.forward(input_tensor)
 
-		print("Network layer mappings:", activation.shape)
+		#print("Network layer mappings:", activation.shape)
 		for layer_id, layer in enumerate(self.layers):
 			with namescope(str(layer_id)+"-"+layer.__class__.__name__):
 				activation = layer.forward(activation)
-			print("->", activation.shape)
+			#print("->", activation.shape)
 			if not isinstance(layer, (Activation, Format, NoFormat, Flatten)):
 				self.real_layers.append(layer_id)
 
@@ -134,7 +134,7 @@ class Network():
 		method_id = method_id if not method_id is None else str(uuid.uuid4())[:3]
 		R = tf.multiply(self.y, class_filter)
 		if methods == "deeptaylor" or consistent: R = tf.nn.relu(R)
-		print("\nLayerwise Relevance Propagation <3")
+		#print("\nLayerwise Relevance Propagation <3")
 		if methods=="zbab":
 			methods = [["zb"]] + [["ab", 2.]]*(len(self.layers)-1)
 		elif methods=="wwab":
@@ -171,34 +171,34 @@ class Network():
 				else:
 					raise Exception("Unknown LRP method: {}".format(m[0]))
 				backward_mapping += str(shape(R))
-				print(type(l), ": ", m, ":", backward_mapping)
+				#print(type(l), ": ", m, ":", backward_mapping)
 				R_layerwise = [R] + R_layerwise
 				Conservation_layerwise = [C] + Conservation_layerwise
 		return R_layerwise, Conservation_layerwise
 
 	def layerwise_conservation_test(self, R_layerwise, Conservation_layerwise, feed_dict):
 		if self.sess is None: raise Exception("Network.layerwise_conservation_test must be called while Network.session is set")
-		print("\n")
+		#print("\n")
 		r_in = R_layerwise[-1]
 		for i_, (l, C, R) in enumerate(zip(self.layers[::-1], Conservation_layerwise[:-1][::-1], R_layerwise[:-1][::-1])):
 			i = len(self.layers)-1 - i_
 			c, input_array, output_array, r = self.sess.run([C, l.input_tensor, l.output_tensor, R], feed_dict=feed_dict)
-			print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
-			print("		Forward:", shape(input_array), " -> ", shape(output_array))
-			print("		Backward", shape(r), " <- ", shape(r_in))
-			print("R_out = ", np.sum(r))
+			#print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
+			#print("		Forward:", shape(input_array), " -> ", shape(output_array))
+			#print("		Backward", shape(r), " <- ", shape(r_in))
+			#print("R_out = ", np.sum(r))
 
 	def layerwise_conservation_test_(self, R_layerwise, Conservation_layerwise, feed_dict):
 		if self.sess is None: raise Exception("Network.layerwise_conservation_test must be called while Network.session is set")
 		r_in = self.layers[-1]
 		conservation_layerwise = self.sess.run(Conservation_layerwise, feed_dict=feed_dict)
 		for i, (l, c) in enumerate(zip(self.layers+["filtered forwarded readout layer = Relevance input layer"], conservation_layerwise)):
-			print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
+			#print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
 
 	def save_params(self, export_dir):
 		tf.gfile.MakeDirs(export_dir)
 		save_path = self.saver.save(self.sess, "{}/model.ckpt".format(export_dir))
-		print("Saved model to ", save_path)
+		#print("Saved model to ", save_path)
 
 	def load_params(self, import_dir):
 		self.create_session()
@@ -243,12 +243,12 @@ class Network():
 		hR = np.sum(h, axis=1)
 		R = np.reshape(R, hR.shape)
 		err = np.absolute(hR-R)
-		print("Relevance - Sum(heatmap) = ", err)
+		#print("Relevance - Sum(heatmap) = ", err)
 
 	def ab_test(self, feed_dict):
 		ab_errors = self.sess.run([l.ab_forward_error for l in self.layers if isinstance(l, Convolution)], feed_dict=feed_dict)
 		for error in ab_errors:
-			print("AB forward error: ", np.mean(np.absolute(error))); input()
+			#print("AB forward error: ", np.mean(np.absolute(error))); input()
 
 	def layerwise_tfnp_test(self, X, T):
 		np_nn = self.to_numpy()
@@ -258,7 +258,7 @@ class Network():
 		for l, a_ in zip(np_nn.layers, cnn_layer_activations):
 			a = l.forward(a)
 			np.testing.assert_allclose(a, a_, atol=1e-5)
-		print("All np/tf layers do the same :) ")
+		#print("All np/tf layers do the same :) ")
 		
 	def feed_dict(self, batch):
 		return {self.input_tensor: batch[0], self.y_: batch[1]}
@@ -562,7 +562,7 @@ class Convolution(AbstractLayerWithWeights):
 			input_shape = input_tensor.get_shape().as_list()
 			if len(input_shape) < 4:
 				h = np.prod(input_shape[1])/28
-				print("Convolutional layer: reshape to height:", h)
+				#print("Convolutional layer: reshape to height:", h)
 				input_tensor = tf.reshape(input_tensor, [-1, int(h), 28, 1])
 			return input_tensor
 		self.input_reshape = input_reshape
