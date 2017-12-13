@@ -91,10 +91,11 @@ class Network():
 		if loss is None: self.loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=self.y_, logits=self.y))
 		else: self.loss = tf.reduce_mean(loss(self.y_, self.y))
 
+		self.correct_classified = tf.equal(tf.argmax(self.y, 1), tf.argmax(self.y_, 1))
 		if shape(self.y)[-1] == 1 and len(shape(self.y)) == 2:
 			self.accuracy = 1-self.loss
 		else:
-			self.accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(self.y, 1), tf.argmax(self.y_, 1)), tf.float32))
+			self.accuracy = tf.reduce_mean(tf.cast(self.correct_classified, tf.float32))
 
 		self.train = tf.train.AdamOptimizer().minimize(self.loss)
 		self.saver = tf.train.Saver(max_to_keep=max_num_instances)
@@ -102,7 +103,7 @@ class Network():
 	def sensivity(self, class_filter):
 		# returns the gradient of class_filter.dot(readout)  wrt the pixel activation
 		target = tf.reduce_sum(tf.multiply(self.y, class_filter))
-		return tf.gradients(target, self.format_layer.output_tensor)
+		return tf.gradients(target, self.format_layer.output_tensor)[0]
 
 	def lrp(self, class_filter, methods = "simple"):
 		"""
@@ -193,7 +194,7 @@ class Network():
 		r_in = self.layers[-1]
 		conservation_layerwise = self.sess.run(Conservation_layerwise, feed_dict=feed_dict)
 		for i, (l, c) in enumerate(zip(self.layers+["filtered forwarded readout layer = Relevance input layer"], conservation_layerwise)):
-			#print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
+			print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
 
 	def save_params(self, export_dir):
 		tf.gfile.MakeDirs(export_dir)
@@ -248,7 +249,7 @@ class Network():
 	def ab_test(self, feed_dict):
 		ab_errors = self.sess.run([l.ab_forward_error for l in self.layers if isinstance(l, Convolution)], feed_dict=feed_dict)
 		for error in ab_errors:
-			#print("AB forward error: ", np.mean(np.absolute(error))); input()
+			print("AB forward error: ", np.mean(np.absolute(error))); input()
 
 	def layerwise_tfnp_test(self, X, T):
 		np_nn = self.to_numpy()
@@ -258,7 +259,7 @@ class Network():
 		for l, a_ in zip(np_nn.layers, cnn_layer_activations):
 			a = l.forward(a)
 			np.testing.assert_allclose(a, a_, atol=1e-5)
-		#print("All np/tf layers do the same :) ")
+		print("All np/tf layers do the same :) ")
 		
 	def feed_dict(self, batch):
 		return {self.input_tensor: batch[0], self.y_: batch[1]}
