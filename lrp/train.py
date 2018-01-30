@@ -3,6 +3,7 @@ from . import utils
 import numpy as np 
 import tensorflow as tf
 import uuid
+from utils import mkdir
 
 import pdb
 
@@ -45,7 +46,7 @@ def normalize_batch(R):
 	return R_norm
 
 def flatten_batch(B):
-	return tf.reshape(B, [B.shape[0], np.prod(B.shape[1:])])
+	return tf.reshape(B, [-1, int(np.prod(B.shape[1:]))])
 
 class namescope():
 	def __init__(self, name):
@@ -105,7 +106,7 @@ class Network():
 		target = tf.reduce_sum(tf.multiply(self.y, class_filter))
 		return tf.gradients(target, self.format_layer.output_tensor)[0]
 
-	def lrp(self, class_filter, methods = "simple"):
+	def lrp(self, class_filter, methods = "simple", explain_layer_id=-1, substract_mean=None):
 		"""
 		Gets:
 			class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
@@ -113,10 +114,10 @@ class Network():
 		Returns:
 			R: input layers relevance tensor
 		"""
-		Rs, _= self.layerwise_lrp(class_filter, methods)
+		Rs, _= self.layerwise_lrp(class_filter, methods, explain_layer_id=explain_layer_id, substract_mean=substract_mean)
 		return Rs[0]
 
-	def layerwise_lrp(self, class_filter, methods = "simple", method_id=None, consistent=False): # class_filter: tf.constant one hot-vector
+	def layerwise_lrp(self, class_filter, methods = "simple", method_id=None, consistent=False, explain_layer_id=-1, substract_mean=None): # class_filter: tf.constant one hot-vector
 		"""
 		Gets:
 			class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
@@ -129,13 +130,35 @@ class Network():
 					If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
 			method_id: an identifier for this stack
 			consistent: if True, negative relevance will be filtered out in readout layer
+			explain_layer_id: Where to apply class filter. This can be used to explain the activation of a certain vector in any layer
+			substract_mean: for pca explanations: explain (Activation-Mean).dot(class_filter)
 		Returns:
 			R_layerwise: list of relevance tensors, one for each layer, so that R[0] is in input-space and R[-1] is in readout-layer space
+		Creates a self.explained_f, use this only with one lrp stack per Network. This can be used to validate the conservativeness
+			For PC Activation Explanations, the mean of this should be zero except for deeptaylor
 		"""
 		method_id = method_id if not method_id is None else str(uuid.uuid4())[:3]
-		R = tf.multiply(self.y, class_filter)
-		if methods == "deeptaylor" or consistent: R = tf.nn.relu(R)
-		#print("\nLayerwise Relevance Propagation <3")
+
+		a = self.layers[explain_layer_id].output_tensor
+		if substract_mean is not None:
+			a -= substract_mean
+		self.test = tf.reduce_sum(a, axis=0)
+
+		"""
+		#R = tf.multiply(self.y, class_filter)
+		# dot product: multiply elements and sum over all axis except for batch_size
+		reduce_axis = tuple(range(1, len(a.shape)))
+		Relevance_sum = expand_dims(tf.reduce_sum(tf.multiply(class_filter, a), axis=reduce_axis), axes=reduce_axis)
+		self.explained_f = Relevance_sum
+		R = Relevance_sum*class_filter/tf.reduce_sum(class_filter)
+		"""
+		R = tf.multiply(a, class_filter/tf.reduce_sum(tf.nn.relu(class_filter)))
+		self.explained_f = tf.reduce_sum(R)
+		
+		if methods == "deeptaylor" or consistent:
+			R = tf.nn.relu(R)
+			self.explained_f = self.explained_f
+
 		if methods=="zbab":
 			methods = [["zb"]] + [["ab", 2.]]*(len(self.layers)-1)
 		elif methods=="wwab":
@@ -146,7 +169,9 @@ class Network():
 			methods = [methods] * len(self.layers)
 		R_layerwise = [R]
 		Conservation_layerwise = [None]
+		last_layer = explain_layer_id % len(self.layers)
 		for l, m, layer_id in zip(self.layers[::-1], methods[::-1], list(range(len(self.layers)))[::-1]):
+			if layer_id > last_layer: continue # skip the layers that come after the to be explained stuff
 			with namescope(str(layer_id)+"-"+l.__class__.__name__+"-"+m[0]+method_id):
 				backward_mapping = str(shape(R)) + " -> "
 				if m[0] == "deep_taylor" or  m[0] == "deeptaylor":
@@ -263,6 +288,39 @@ class Network():
 		
 	def feed_dict(self, batch):
 		return {self.input_tensor: batch[0], self.y_: batch[1]}
+
+	def fit(self, data, stopping_criterion=gl(300, 5000), perform_action=None, action_rythm=50, val_dict=None):
+		"""
+		Fit a dataset using early stopping, with the possibility to inject any action and a rythm into the train process, i.e. tracking stuff
+		Gets:
+			data: a data object that implements next_batch() and validation_batch, expected to return a feed_dict or a (X, y_)-tuple
+			perform_action(train_step)
+		"""
+		logdir = ".temp/"+str(uuid.uuid4())[:5]
+		mkdir(logdir)
+		if val_dict is None:
+			batch = data.validation_batch()
+			val_dict = batch if isinstance(batch, dict) else {self.input_tensor: batch[0], self.y_: batch[1]}
+		val_accs = []
+		i = 0
+		best_acc = 0
+		while(stopping_criterion(i, val_accs)):
+			batch = data.next_batch(50)
+			feed_dict = batch if isinstance(batch, dict) else {self.input_tensor: batch[0], self.y_: batch[1]}
+			self.sess.run(self.train, feed_dict=feed_dict)
+			if i%50 == 0:
+				val_accs += [self.sess.run(self.accuracy, feed_dict=val_dict)]
+				print(val_accs[-1])
+				if val_accs[-1] >= best_acc:
+					best_acc = val_accs[-1]
+					self.save_params(logdir)
+			if i%action_rythm == 0 and perform_action is not None: perform_action(i)
+			i += 1
+		self.load_params(logdir)
+		acc = self.sess.run(self.accuracy, feed_dict=val_dict)		
+		print("Training finished with validation accuracy:", acc)
+		return val_accs
+
 
 # -------------------------
 # Abstract Layer
