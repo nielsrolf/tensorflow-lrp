@@ -67,6 +67,7 @@ class Network():
 		self.format_layer = layers[0]
 		self.layers = layers[1:]
 		self.input_tensor = input_tensor
+		self.X = input_tensor
 		self.y_ = y_
 		self.session = None
 		self.real_layers = []
@@ -100,6 +101,15 @@ class Network():
 
 		self.train = tf.train.AdamOptimizer().minimize(self.loss)
 		self.saver = tf.train.Saver(max_to_keep=max_num_instances)
+
+	def maximize_activation(self, layer_id, pattern, step_size=0.01):
+		# something like deepdream
+		# define objective
+		target = flatten_batch(self.layers[layer_id].output_tensor)
+		loss = -tf.reduce_sum(tf.multiply(target,pattern))
+		# get gradient
+		gradient = tf.gradients(loss, self.input_tensor)[0]
+		return self.input_tensor - step_size*gradient
 
 	def sensivity(self, class_filter):
 		# returns the gradient of class_filter.dot(readout)  wrt the pixel activation
@@ -153,7 +163,7 @@ class Network():
 		R = Relevance_sum*class_filter/tf.reduce_sum(class_filter)
 		"""
 		R = tf.multiply(a, class_filter/tf.reduce_sum(tf.nn.relu(class_filter)))
-		self.explained_f = tf.reduce_sum(R)
+		self.explained_f = tf.reduce_sum(R, axis=list(range(1, len(R.shape))))
 		
 		if methods == "deeptaylor" or consistent:
 			R = tf.nn.relu(R)
@@ -310,7 +320,7 @@ class Network():
 			self.sess.run(self.train, feed_dict=feed_dict)
 			if i%50 == 0:
 				val_accs += [self.sess.run(self.accuracy, feed_dict=val_dict)]
-				print(val_accs[-1])
+				print("Train step ", i, ": ", val_accs[-1])
 				if val_accs[-1] >= best_acc:
 					best_acc = val_accs[-1]
 					self.save_params(logdir)
