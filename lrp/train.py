@@ -474,6 +474,8 @@ class Activation(Layer):
 
     def alphabeta_lrp(self, R, alpha=1.): return R, tf.constant(1.)
 
+    def generalized_deeptaylor(self, R, gamma=0.5): return R, tf.constant(1.)
+
 
 class ReLU(Activation):
     def forward(self, input_tensor):
@@ -581,8 +583,8 @@ class AbstractLayerWithWeights(Layer):
         R_out = tf.gradients(t, in_ones, grad_ys=R_per_t)[0]
         return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
-    def generalized_deep_taylor(self, R, gamma=0.5):
-        w = tf.maximum(self.w, 0) + gamma*tf.minimum(self.w, 0)
+    def generalized_deeptaylor(self, R, gamma=0.5):
+        w = tf.maximum(self.weights, 0) + gamma*tf.minimum(self.weights, 0)
         R_out = self._simple_lrp(R, w, self.input_tensor)
         return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
