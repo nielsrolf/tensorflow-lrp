@@ -130,7 +130,7 @@ class Network():
         target = tf.reduce_sum(tf.multiply(self.y, class_filter))
         return tf.gradients(target, self.format_layer.output_tensor)[0]
 
-    def lrp(self, class_filter, methods="simple", explain_layer_id=-1, substract_mean=None):
+    def lrp(self, class_filter, methods="simple", explain_layer_id=-1, substract_mean=None, reference=None):
         """
         Gets:
             class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
@@ -139,11 +139,11 @@ class Network():
             R: input layers relevance tensor
         """
         Rs, _ = self.layerwise_lrp(class_filter, methods, explain_layer_id=explain_layer_id,
-                                   substract_mean=substract_mean)
+                                   substract_mean=substract_mean, reference=reference)
         return Rs[0]
 
     def layerwise_lrp(self, class_filter, methods="simple", method_id=None, consistent=False, explain_layer_id=-1,
-                      substract_mean=None):  # class_filter: tf.constant one hot-vector
+                      substract_mean=None, reference=None):  # class_filter: tf.constant one hot-vector
         """
         Gets:
             class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
@@ -152,15 +152,23 @@ class Network():
                 If one of the following standard method combinations shall be used, also pass the string code:
                     "zbab" -> zb - rule for the first layer, after that ab-rule with alpha=2.
                     "wwab" -> ww - rule for the first layer, after that ab-rule with alpha=2.
-                If this is the case, but the methods needs an additional numeric parameter, then it can be passed like ["methodstr", <param>]
-                If the methods shall be specified for each layer, then a list has to be passed, where each element is a list like ["methodstr"(, <param>)]
+                If this is the case, but the methods needs an additional numeric parameter, then it can be passed like
+                    ["methodstr", <param>]
+                If the methods shall be specified for each layer, then a list has to be passed, where each element is a
+                    list like ["methodstr"(, <param>)]
             method_id: an identifier for this stack
             consistent: if True, negative relevance will be filtered out in readout layer
-            explain_layer_id: Where to apply class filter. This can be used to explain the activation of a certain vector in any layer
+            explain_layer_id: Where to apply class filter. This can be used to explain the activation of a certain
+                              vector in any layer
             subtract_mean: for pca explanations: explain (Activation-Mean).dot(class_filter)
+            reference: choose reference=None for regular lrp, reference="batch" to use activations-mean_in_
+                       current_batch(activations) for lrp calculations and reference=X to subtract avg activations for
+                       X for lrp calculations
         Returns:
-            R_layerwise: list of relevance tensors, one for each layer, so that R[0] is in input-space and R[-1] is in readout-layer space
-        Creates a self.explained_f, use this only with one lrp stack per Network. This can be used to validate the conservativeness
+            R_layerwise: list of relevance tensors, one for each layer, so that R[0] is in input-space and R[-1] is in
+                        readout-layer space
+        Creates a self.explained_f, use this only with one lrp stack per Network. This can be used to validate the
+            conservativeness
             For PC Activation Explanations, the mean of this should be zero except for deeptaylor
         """
         method_id = method_id if not method_id is None else str(uuid.uuid4())[:3]
@@ -170,20 +178,24 @@ class Network():
             a -= substract_mean
         self.test = tf.reduce_sum(a, axis=0)
 
-        """
-        #R = tf.multiply(self.y, class_filter)
-        # dot product: multiply elements and sum over all axis except for batch_size
-        reduce_axis = tuple(range(1, len(a.shape)))
-        Relevance_sum = expand_dims(tf.reduce_sum(tf.multiply(class_filter, a), axis=reduce_axis), axes=reduce_axis)
-        self.explained_f = Relevance_sum
-        R = Relevance_sum*class_filter/tf.reduce_sum(class_filter)
-        """
         R = tf.multiply(a, class_filter / tf.reduce_sum(tf.nn.relu(class_filter)))
         self.explained_f = tf.reduce_sum(R, axis=list(range(1, len(R.shape))))
 
         if methods == "deeptaylor" or consistent:
             R = tf.nn.relu(R)
-            self.explained_f = self.explained_f
+
+        if isinstance(reference, np.ndarray):
+            ref = tf.constant(reference, dtype=tf.float32)
+            ref = self.format_layer.forward_silent(ref)
+            for layer in self.layers:
+                ref = layer.forward_silent(ref)
+                layer.set_reference(tf.reduce_mean(ref, axis=0))
+        elif reference == "batch":
+            for layer in self.layers:
+                layer.set_reference(tf.reduce_mean(layer.output_tensor), axis=0)
+        else:
+            for layer in self.layers:
+                layer.set_reference(0)
 
         if methods == "zbab":
             methods = [["zb"]] + [["ab", 2.]] * (len(self.layers) - 1)
@@ -264,7 +276,7 @@ class Network():
     # print("Saved model to ", save_path)
 
     def load_params(self, import_dir):
-        self.create_session()
+        #self.create_session()
         self.saver.restore(self.sess, "{}/model.ckpt".format(import_dir))
 
     def reset_params(self):
@@ -348,14 +360,11 @@ class Network():
         val_accs = []
         i = 0
         best_acc = 0
-        while (stopping_criterion(i, val_accs)):
-            print("Get Batch")
+        while stopping_criterion(i, val_accs):
             batch = data.next_batch(train_batch_size)
-            print("Train step")
             feed_dict = batch if isinstance(batch, dict) else {self.input_tensor: batch[0], self.y_: batch[1]}
             self.sess.run(self.train, feed_dict=feed_dict)
             if i % validation_rythm == 0:
-                print("validate")
                 val_accs += [self.sess.run(self.accuracy, feed_dict=val_dict)]
                 print("Train step ", i, ": ", val_accs[-1])
                 if val_accs[-1] >= best_acc:
@@ -386,15 +395,25 @@ class Layer():
             W, B = self.sess.run([self.weights, self.biases], feed_dict={})
             return self.lrp_module(W, B)
 
+    def set_reference(self, reference):
+        self.reference = reference
+
 
 # -------------------------
 # Format Layer
 # -------------------------
 class Format(Layer):
+    def __init__(self, highest=1., lowest=-1.):
+        super().__init__()
+        self.highest, self.lowest = highest, lowest
+
     def forward(self, input_tensor):
         self.input_tensor = input_tensor
-        self.output_tensor = tf.add(input_tensor * (utils.highest - utils.lowest), utils.lowest)
+        self.output_tensor = tf.add(input_tensor * (self.highest - self.lowest), self.lowest)
         return self.output_tensor
+
+    def forward_silent(self, input_tensor):
+        return tf.add(input_tensor * (self.highest - self.lowest), self.lowest)
 
     def choose_deeptaylor(self, layer, R):
         return layer.zB_lrp(R)
@@ -402,45 +421,46 @@ class Format(Layer):
     def to_numpy(self):
         return modules.Format()
 
+    def lrp(self, R): return R, tf.constant(1.)
 
-class NoFormat(Layer):
+    def deep_taylor(self, R): return self.lrp(R)
+
+    def simple_lrp(self, R): return self.lrp(R)
+
+    def alphabeta_lrp(self, R, alpha=1.): return self.lrp(R)
+
+
+class NoFormat(Format):
     def forward(self, input_tensor):
         self.input_tensor = input_tensor
         self.output_tensor = input_tensor
         return self.output_tensor
 
+    def forward_silent(self, input_tensor):
+        return input_tensor
+
     def choose_deeptaylor(self, layer, R):
         return layer.ww_lrp(R)
 
 
-class Flatten(Layer):
+class Flatten(Format):
     def forward(self, input_tensor):
         self.input_tensor = input_tensor
         self.output_tensor = tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
         return self.output_tensor
 
-    def lrp(self, R): return R, tf.constant(1.)
-
-    def deep_taylor(self, R): return self.lrp(R)
-
-    def simple_lrp(self, R): return self.lrp(R)
-
-    def alphabeta_lrp(self, R, alpha=1.): return self.lrp(R)
+    def forward_silent(self, input_tensor):
+        return tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
 
 
-class MNISTShape(Layer):
+class MNISTShape(Format):
     def forward(self, input_tensor):
         self.input_tensor = input_tensor
         self.output_tensor = tf.reshape(input_tensor, [-1, 28, 28, 1])
         return self.output_tensor
 
-    def lrp(self, R): return R, tf.constant(1.)
-
-    def deep_taylor(self, R): return self.lrp(R)
-
-    def simple_lrp(self, R): return self.lrp(R)
-
-    def alphabeta_lrp(self, R, alpha=1.): return self.lrp(R)
+    def forward_silent(self, input_tensor):
+        return tf.reshape(input_tensor, [-1, 28, 28, 1])
 
 
 class IMGReshape(Format):
@@ -455,13 +475,11 @@ class IMGReshape(Format):
         self.output_tensor = tf.reshape(preformat, [-1, img_shape[0], img_shape[1], channels])
         return self.output_tensor
 
-    def lrp(self, R): return R, tf.constant(1.)
-
-    def deep_taylor(self, R): return self.lrp(R)
-
-    def simple_lrp(self, R): return self.lrp(R)
-
-    def alphabeta_lrp(self, R, alpha=1.): return self.lrp(R)
+    def forward_silent(self, input_tensor):
+        preformat = super().forward(input_tensor)
+        img_shape = self.img_shape
+        channels = img_shape[2] if len(img_shape) == 3 else 1
+        return tf.reshape(preformat, [-1, img_shape[0], img_shape[1], channels])
 
 
 # -------------------------
@@ -483,6 +501,9 @@ class ReLU(Activation):
         self.output_tensor = tf.nn.relu(input_tensor)
         return self.output_tensor
 
+    def forward_silent(self, input_tensor):
+        return tf.nn.relu(input_tensor)
+
     def to_numpy(self):
         return modules.ReLU()
 
@@ -493,12 +514,18 @@ class Tanh(Activation):
         self.output_tensor = tf.nn.tanh(input_tensor)
         return self.output_tensor
 
+    def forward_silent(self, input_tensor):
+        return tf.nn.tanh(input_tensor)
+
 
 class Abs(Activation):
     def forward(self, input_tensor):
         self.input_tensor = input_tensor
         self.output_tensor = tf.abs(input_tensor)
         return self.output_tensor
+
+    def forward_silent(self, input_tensor):
+        return  tf.abs(input_tensor)
 
     def to_numpy(self):
         return modules.Abs()
@@ -524,8 +551,12 @@ class AbstractLayerWithWeights(Layer):
         self.output_tensor = self.activators + self.biases
         return self.output_tensor
 
-    def _simple_lrp(self, R, weights, input_tensor):
-        activators = self.linear_operation(input_tensor, weights)
+    def forward_silent(self, input_tensor):
+        activators = self.linear_operation(self.input_reshape(input_tensor), self.weights)
+        return activators + self.biases
+
+    def _simple_lrp(self, R, weights, input_tensor, ref=0):
+        activators = self.linear_operation(input_tensor, weights) - ref
         R = tf.reshape(R, shape(activators))
         R_per_act = tf.divide(R, activators + 1e-12)
         R_per_in_act = tf.gradients(activators, input_tensor, grad_ys=R_per_act)[0]
@@ -533,7 +564,7 @@ class AbstractLayerWithWeights(Layer):
         return R_out  # R_per_in_act#R_out
 
     def simple_lrp(self, R):
-        R_out = self._simple_lrp(R, self.weights, self.input_tensor)
+        R_out = self._simple_lrp(R, self.weights, self.input_tensor, self.reference)
         return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
     def alphabeta_lrp(self, R, alpha=1.):
@@ -544,33 +575,6 @@ class AbstractLayerWithWeights(Layer):
         R_out_plus = self._simple_lrp(R, w_plus, input_tensor)
         R_out_minus = self._simple_lrp(R, w_minus, input_tensor)
         R_out = alpha * R_out_plus + (1. - alpha) * R_out_minus
-        return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
-
-    def alphabeta_lrp_(self, R, alpha=1.):
-        # Split activators into + and -
-        input_plus = tf.nn.relu(self.input_tensor) + 1e-9
-        input_minus = tf.nn.relu(-self.input_tensor) + 1e-9
-        w_plus = tf.nn.relu(self.weights) + 1e-9
-        w_minus = tf.nn.relu(-self.weights) + 1e-9
-
-        a_plus1 = self.linear_operation(input_plus, w_plus)
-        a_plus2 = self.linear_operation(input_minus, w_minus)
-        a_minus1 = self.linear_operation(input_plus, w_minus)
-        a_minus2 = self.linear_operation(input_minus, w_plus)
-        # the following can be used to check if activator decomposition holds:
-        # self.ab_forward_error = tf.divide(self.activators - (a_plus1+a_plus2 - (a_minus1+a_minus2)), self.activators)
-
-        R_plus1 = tf.multiply(R, tf.divide(a_plus1, a_plus1 + a_plus2))
-        R_plus2 = tf.multiply(R, tf.divide(a_plus2, a_plus1 + a_plus2))
-        R_minus1 = tf.multiply(R, tf.divide(a_minus1, a_minus1 + a_minus2))
-        R_minus2 = tf.multiply(R, tf.divide(a_minus2, a_minus1 + a_minus2))
-
-        R_out_plus = self._simple_lrp(R_plus1, w_plus, input_plus) + self._simple_lrp(R_plus2, w_minus, input_minus)
-        R_out_minus = self._simple_lrp(R_minus1, w_minus, input_plus) + self._simple_lrp(R_minus2, w_plus, input_minus)
-
-        R_out = alpha * R_out_plus + (1. - alpha) * R_out_minus
-        # R_out = R_out_minus
-
         return R_out, tf.reduce_sum(R_out) / tf.reduce_sum(R)
 
     def ww_lrp(self, R):
@@ -667,6 +671,12 @@ class LinearWithMoreBias(NextLinear):
         self.output_tensor = self.activators + self.biases * self.bias_multiplicator
         return self.output_tensor
 
+    def forward_silent(self, input_tensor):
+        input_tensor = self.input_reshape(input_tensor)
+        activators =  self.linear_operation(input_tensor, self.weights)
+        return activators + self.biases * self.bias_multiplicator
+
+
 
 # -------------------------
 # Abstract Layer without weights and biases, for Pooling, Padding
@@ -679,10 +689,13 @@ class AbstractLayerWithoutWB(Layer):
 
     def forward(self, input_tensor):
         self.input_tensor = self.input_reshape(input_tensor)
-        # alternative implementation for:
-        output_tensor = tf.nn.pool(input_tensor, [2, 2], "AVG", "VALID", strides=[2, 2]) * 2
-        self.output_tensor = output_tensor
-        return output_tensor
+        # here was a big mistake in earlier versions, this would always implement a certain pooling layer
+        self.output_tensor = self.linear_operation(input_tensor)
+        return self.output_tensor
+
+    def forward_silent(self, input_tensor):
+        input_tensor = self.input_reshape(input_tensor)
+        return self.linear_operation(input_tensor)
 
     def _simple_lrp(self, R, input_tensor):
         input_tensor += 1e-9

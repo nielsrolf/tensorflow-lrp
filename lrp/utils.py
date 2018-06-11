@@ -93,8 +93,6 @@ def graymap(x):
 # --------------------------------------
 
 def visualize(x,colormap,name):
-	print("Visualize", name)
-	print("R elem [{}, {}]".format(np.amin(x), np.amax(x)))
 	N = len(x); assert(N<=16)
 
 	x = colormap(x/(np.abs(x).max()+1e-09))

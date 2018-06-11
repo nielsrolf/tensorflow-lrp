@@ -1,6 +1,5 @@
-from .lrp.train import *
-from .lrp import utils
-from . import read_mnist
+from lrp.train import *
+from lrp import read_mnist
 import os
 from matplotlib import pyplot as plt
 
