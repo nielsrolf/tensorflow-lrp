@@ -57,7 +57,7 @@ class Data():
         return {self.X: self.X_val, self.y_: self.y_val}
 
     def test_batch(self):
-        return {self.X: self.X_test, self.y_: self.y_testl}
+        return {self.X: self.X_test, self.y_: self.y_test}
 
 
 
