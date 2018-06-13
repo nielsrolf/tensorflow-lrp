@@ -86,36 +86,40 @@ def var_relevance(architecture):
     nn = Network(architecture, data.X, data.y_)
 
 
-    x_mean, x_var = tf.placeholder(tf.float32, data.X.shape), tf.placeholder(tf.float32, data.X.shape)
+    x_mean, x_var = tf.placeholder(tf.float32, data.X.shape[1:]), tf.placeholder(tf.float32, data.X.shape[1:])
     p_mean, p_var = nn.get_mean_var(x_mean, x_var)
 
     nn.create_session()
-    nn.fit(data, stopping_criterion=lambda i, _: i<451)
+    nn.fit(data, stopping_criterion=lambda i, _: i<51)
 
     emp_mean, emp_var = np.mean(data.X_val, axis=0), np.var(data.X_val, axis=0)
 
     # filters for feature sets; 1: feature is not known, 0: feature is known
     zero = np.zeros([28, 28])
 
-    m_c = zero
+    m_c = np.zeros([28, 28])
     m_c[9:19, 9:19] = 1
 
-    s_c = zero
+    s_c = np.zeros([28, 28])
     s_c[13:15, 13:15] = 1
 
-    l = zero + 1
+    l = np.zeros([28, 28]) + 1
 
-    m_left = zero
+    m_left = np.zeros([28, 28])
     m_left[:10, 9:19] = 1
 
-    for features, feature_name in zip([m_c, s_c, l, m_left], ["m_c", "s_c", "l", "m_left"]):
-        plt.imshow(feature)
-        plt.savefig(feature_name+".png")
-        mean, var = nn.sess.run(p_mean, p_var, feed_dict={
-            x_mean: np.reshape((features*emp_mean)[None, ...] + (1-features)*data.X_val, shape=[-1]+list(data.X.shape[1:])),
-            x_var: np.reshape((features*emp_var)[None, ...], shape=[-1]+list(data.X.shape[1:]))
-        })
-        print(feature_name, var)
+    for sample_id in range(10):
+        utils.visualize(data.X_val[sample_id][None,...], utils.heatmap_original, "sample-{}.png".format(sample_id))
+
+        for features, feature_name in zip([m_c, s_c, l, m_left], ["m_c", "s_c", "l", "m_left"]):
+            plt.imshow(features)
+            plt.savefig(feature_name+".png")
+            features = np.reshape(features, emp_var.shape)
+            mean, var = nn.sess.run([p_mean, p_var], feed_dict={
+                x_mean: np.reshape((features*emp_mean) + (1-features)*data.X_val[sample_id], list(data.X.shape[1:])),
+                x_var: np.reshape((features*emp_var), list(data.X.shape[1:]))
+            })
+            print("(sample ", sample_id, ")", feature_name, var/mean)
 
     nn.close_sess()
 

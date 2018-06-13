@@ -395,12 +395,13 @@ class Network():
         """
         Estimate relevance by inspecting the influence of variance in features (unknown features) on the variance of
         predictions
-        :param input_mean: tf.placeholder of shape self.input_tensor
-        :param input_var: tf.placeholder of shape self.input_tensor
+        :param input_mean: tf.placeholder of shape self.input_tensor, but for a single sample
+        :param input_var: tf.placeholder of shape self.input_tensor, but for a single sample
         :return: mean and variance of shape self.y
         """
         mean, var = input_mean, input_var
         for layer in [self.format_layer] + self.layers:
+            print("mean", mean.shape, "var", var.shape)
             mean, var = layer.forward_mean_var(mean, var)
         return mean, var
 
@@ -432,7 +433,8 @@ class Layer():
         var = tf.reshape(var, s_shape)
         X = tf.random_normal(x_shape, mean, var)
         y = self.forward_silent(X)
-        return tf.nn.moments(y, axes=0)
+        mean_out, var_out = tf.nn.moments(y, axes=0)
+        return mean_out, var_out
 
 
 # -------------------------
