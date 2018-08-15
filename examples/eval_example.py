@@ -49,11 +49,15 @@ def eval_example():
     # rules = ["deeptaylor",
     #         "zbab",]
 
-    rules = [("simple", {"reference": data.X_val})]
-    #rules = ["simple"]
+    rules = ["simple",
+             ("simple", {"reference": data.X_val}),
+             "deeptaylor",
+             ("deeptaylor", {"reference": data.X_val}),
+             "zbab",
+             ("zbab", {"reference": data.X_val})]
 
     evaluator = HeatmapEval(nns, ["fcn", "cnn"],
-                            rules, ["simple"], # ["deeptaylor", "zbab", "ref-deeptaylor"],
+                            rules, ["simple", "simple-ref", "deeptaylor", "deeptaylor-ref", "zbab", "zbab-ref"],
                             data)
 
     with tf.Session() as sess:
@@ -64,17 +68,17 @@ def eval_example():
         os.makedirs("evaluate/heatmaps", exist_ok=True)
 
         for nn_name, nn in zip(["fcn", "cnn"], nns):
-            nn.fit(data, stopping_criterion=lambda i, _: i<150)
+            print("Evaluate", nn_name)
+            nn.fit(data, stopping_criterion=lambda i, _: i<1500)
 
             for rule_name, H in zip(evaluator.rule_names, evaluator.heatmaps[nn]):
+                print("Evaluate", rule_name)
                 heatmaps, prediction = sess.run([H, nn.y], feed_dict={data.X: data.X_test[:16], data.y_: data.y_test[:16]})
                 utils.visualize(heatmaps, utils.heatmap_original, "evaluate/heatmaps/{}-{}.png".format(
                     nn_name, rule_name))
-                relevance = np.sum(heatmaps, axis=tuple(range(1, len(heatmaps.shape))))
-                prediction = np.sum(prediction*data.y_test[:16], axis=1)
-                conservation_error =  np.where(prediction>0, prediction-relevance, relevance)
-                print("Conservation Error for", nn_name, rule_name, "\n: ", conservation_error)
+                print("Visualized heatmaps")
 
+        print("--------- COMPARE -----------------")
         evaluator.compare()
         evaluator.plot_effect(".")
 
@@ -124,8 +128,9 @@ def var_relevance(architecture):
     nn.close_sess()
 
 
+eval_example()
 
-
+"""
 
 cnn = lambda : [Format(), NextConvolution([5, 5, 1, 32]), ReLU(), Pooling(),
                    NextConvolution([5, 5, 32, 64]), ReLU(), Pooling(),
@@ -135,7 +140,9 @@ cnn = lambda : [Format(), NextConvolution([5, 5, 1, 32]), ReLU(), Pooling(),
 fcn = lambda : [Format(), FirstLinear(784), ReLU(), NextLinear(10)]
 
 
-var_relevance(cnn())
+
+
+#var_relevance(cnn())
 
 conservation_test(cnn(), "cnn", ["zbab"], "zab-ref", reference="val")
 conservation_test(cnn(), "cnn", ["zbab"], "zbab", reference=None)
@@ -143,3 +150,5 @@ conservation_test(cnn(), "cnn", ["ab"], "ab-ref", reference="val")
 conservation_test(fcn(), "fcn", ["zbab"], "zab-ref", reference="val")
 conservation_test(fcn(), "fcn", ["zbab"], "zbab", reference=None)
 conservation_test(fcn(), "fcn", ["ab"], "ab-ref", reference="val")
+"""
+

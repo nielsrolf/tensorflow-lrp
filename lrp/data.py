@@ -31,7 +31,7 @@ class Data():
 
         if img_shape is not None:
             self.img_shape = img_shape
-        elif len(X[0].shape) > 1:
+        else:
             self.img_shape = self.X_train[0].shape
 
     def _new_epoch(self):

@@ -88,6 +88,10 @@ def graymap(x):
 	x = x[...,np.newaxis]
 	return np.concatenate([x,x,x],axis=-1)*0.5+0.5
 
+def graymap_direct(x):
+	x = x[...,np.newaxis]
+	return np.concatenate([x,x,x],axis=-1)*0.5+0.5
+
 # --------------------------------------
 # Visualizing data
 # --------------------------------------
