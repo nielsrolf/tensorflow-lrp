@@ -405,6 +405,26 @@ class Network():
             mean, var = layer.forward_mean_var(mean, var)
         return mean, var
 
+    def generator_relevance(self, X, features, generator, loss, labels=None, avg_over=10):
+        """
+        Estimate relevance of features by doing the following
+        - fill the missing features using a generator
+        - forward the new input
+        - compute the loss between original prediction and prediction of generated input
+        - repeat and average the loss
+        :param X: original input of shape (batch_size, sample_shape)
+        :param features: tensor of shape (sample_shape), 1 for the known and 0 for the unknown features
+        :param generator: a method that maps (X, features) => X'
+        :return: a list of size (batch_size) containing the average loss
+        """
+        prediction = self.sess.run(self.y, feed_dict={self.X: X})
+        losses = []
+        for i in range(avg_over):
+            X_g = generator(X, features)
+            estimate = self.sess.run(self.y, feed_dict={self.X: X_g})
+            losses.append(loss(prediction, estimate, labels))
+        return np.mean(losses)
+
 
 # -------------------------
 # Abstract Layer

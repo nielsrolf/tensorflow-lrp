@@ -5,6 +5,7 @@ import os
 from lrp.evaluate_rule import HeatmapEval
 from lrp import utils
 import os
+from lrp.generator import *
 
 import pdb
 
@@ -128,7 +129,61 @@ def var_relevance(architecture):
     nn.close_sess()
 
 
-eval_example()
+#eval_example()
+
+def generator_example():
+    mnist = read_mnist.read_data_sets("{}/datasets/mnist".format(os.environ["TF_PROJECTS"]), one_hot=True)
+    X_train = mnist.train.images[:100]
+    X_test = mnist.train.images[100:110]
+    generator = GaussianGenerator(X_train)
+
+    s_c = np.ones([28, 28])
+    s_c[13:15, 13:13] = 0
+
+    m_c = np.ones([28, 28])
+    m_c[11:17, 11:17] = 0
+    m_c = m_c.flatten()
+
+    m_l = np.ones([28, 28])
+    m_l[18:14, 11:17] = 0
+    m_l = m_l.flatten()
+
+    for image_id, image_ in enumerate(X_test):
+        # show image with all filters + relevance
+        for filter_id, filter in enumerate([s_c, m_c, m_l]):
+            image = np.array(image_)
+            filtered_image = np.zeros([784, 3])
+            filtered_image[:,0] = image*0.8
+            filtered_image[:,1] = image*0.8
+            filtered_image[:,2] = image*0.8
+            filtered_image[:,0][filter==0] += 0.2
+            filtered_image[:,1][filter!=0] += 0.2
+            filtered_image =  np.reshape(filtered_image, [28, 28, 3])
+            plt.subplot(3, 3, filter_id)
+            plt.imshow(filtered_image)
+            plt.title(["s_c", "m_c", "m_l"][filter_id])
+
+        for g_id, generator in [GaussianGenerator(X_train), StupidGenerator(X_train)(X_test, s_c)]:
+            for filter_id, filter in enumerate([s_c, m_c, m_l]):
+                X_gen = generator(X_test, s_c)
+
+        plt.savefig("{}.png".format(image_id))
+        plt.clf()
+
+    """
+
+    s_c = np.reshape(s_c, [np.prod(s_c.shape)])
+    X_gen = generator(X_test, s_c)
+    utils.visualize(X_gen, utils.graymap, "gaussgen")
+
+    X_gen = StupidGenerator(X_train)(X_test, s_c)
+    utils.visualize(X_gen, utils.graymap, "stupidgen")
+    """
+
+
+    
+
+generator_example()
 
 """
 
