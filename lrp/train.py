@@ -211,37 +211,29 @@ class Network():
         last_layer = explain_layer_id % len(self.layers)
         for l, m, layer_id, ref in zip(self.layers[::-1], methods[::-1], list(range(len(self.layers)))[::-1], refs[::-1]):
             if layer_id > last_layer: continue  # skip the layers that come after the to be explained stuff
+
+            kwargs = {"ref": ref} if isinstance(l, AbstractLayerWithWeights) else {}
+
             with namescope(str(layer_id) + "-" + l.__class__.__name__ + "-" + m[0] + method_id):
                 backward_mapping = str(shape(R)) + " -> "
                 if m[0] == "deep_taylor" or m[0] == "deeptaylor":
                     if layer_id > 0:
-                        R, C = l.deep_taylor(R)
+                        R, C = l.deep_taylor(R, **kwargs)
                     else:
                         R, C = self.format_layer.choose_deeptaylor(l, R)
                 elif m[0] == "gdt":
-                    R, C = l.generalized_deeptaylor(R, m[1])
+                    R, C = l.generalized_deeptaylor(R, m[1], **kwargs)
                 elif m[0] == "simple":
-                    R, C = l.simple_lrp(R, ref=ref)
+                    R, C = l.simple_lrp(R, **kwargs)
                 elif m[0] == "ab" or m[0] == "alphabeta":
                     if len(m) > 1:
-                        if isinstance(l, AbstractLayerWithWeights):
-                            R, C = l.alphabeta_lrp(R, m[1], ref=ref)
-                        else:
-                            R, C = l.alphabeta_lrp(R, m[1])
+                        R, C = l.alphabeta_lrp(R, m[1], **kwargs)
                     else:
-                        if isinstance(l, AbstractLayerWithWeights):
-                            R, C = l.alphabeta_lrp(R, ref=ref)
-                        else:
-                            R, C = l.alphabeta_lrp(R)
-
-                elif m[0] == "simpleb":
-                    R, C = l.simple_lrp(R)
-                elif m[0] == "abb" or m[0] == "alphabeta":
-                    R, C = l.alphabeta_lrp(R, m[1])
+                        R, C = l.alphabeta_lrp(R, **kwargs)
                 elif m[0] == "zb":
-                    R, C = l.zB_lrp(R)
+                    R, C = l.zB_lrp(R, **kwargs)
                 elif m[0] == "ww":
-                    R, C = l.ww_lrp(R)
+                    R, C = l.ww_lrp(R, **kwargs)
                 else:
                     raise Exception("Unknown LRP method: {}".format(m[0]))
                 backward_mapping += str(shape(R))
@@ -724,9 +716,9 @@ class AbstractLayerWithWeights(Layer):
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R_out)), axis=1)+ 1e-9) / 
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R)), axis=1) + 1e-9) -1)) + 1
 
-    def generalized_deeptaylor(self, R, gamma=0.5):
+    def generalized_deeptaylor(self, R, gamma=0.5, ref=0.0):
         w = tf.maximum(self.weights, 0) + gamma*tf.minimum(self.weights, 0)
-        R_out = self._simple_lrp(R, w, self.input_tensor)
+        R_out = self._simple_lrp(R, w, self.input_tensor, ref=ref)
         return R_out, tf.reduce_mean(tf.abs(
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R_out)), axis=1)+ 1e-9) / 
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R)), axis=1) + 1e-9) -1)) + 1
@@ -768,10 +760,14 @@ class Linear(AbstractLayerWithWeights):
 
         self.get_w_shape = get_w_shape  # lambda input_tensor : [shape(input_tensor)[-1], num_neurons]
 
-    def zB_lrp(self, R):
+    def zB_lrp(self, R, ref=0.0):
+        if ref != 0.0:
+            input_tensor = self.input_tensor -  self.input_reshape(ref)
+        else:
+            input_tensor = self.input_tensor
         self.R_in = R
         W, V, U = self.weights, tf.maximum(0., self.weights), tf.minimum(0., self.weights)
-        X, L, H = self.input_tensor, self.input_tensor * 0 + utils.lowest, self.input_tensor * 0 + utils.highest
+        X, L, H = input_tensor, input_tensor * 0 + utils.lowest, input_tensor * 0 + utils.highest
 
         Z = tf.matmul(X, W) - tf.matmul(L, V) - tf.matmul(H, U) + 1e-9
         S = tf.divide(R, Z)
@@ -819,10 +815,16 @@ class Convolution(AbstractLayerWithWeights):
         Y = self.linear_operation(self.input_tensor, W)
         return tf.gradients(Y, self.input_tensor, DY)[0]
 
-    def zB_lrp(self, R):
+    def zB_lrp(self, R, ref=0.0):
+
+        if ref != 0.0:
+            input_tensor = self.input_tensor -  self.input_reshape(ref)
+        else:
+            input_tensor = self.input_tensor
+
         W_plus = tf.nn.relu(self.weights)
         W_minus = -tf.nn.relu(-self.weights)
-        X, L, H = self.input_tensor, self.input_tensor * 0 + utils.lowest, self.input_tensor * 0 + utils.highest
+        X, L, H = input_tensor, input_tensor * 0 + utils.lowest, input_tensor * 0 + utils.highest
         Z = self.linear_operation(X, self.weights) - self.linear_operation(L, W_plus) - \
             self.linear_operation(H, W_minus) + 1e-09
         S = tf.divide(R, Z)
@@ -841,8 +843,8 @@ class NextConvolution(Convolution):
         super().__init__(*args, **kwargs)
         self.lrp_module = modules.NextConvolution
 
-    def deep_taylor(self, R):
-        return self.alphabeta_lrp(tf.nn.relu(R), alpha=1.)
+    def deep_taylor(self, R, ref=0.0):
+        return self.alphabeta_lrp(tf.nn.relu(R), alpha=1., ref=ref)
 
 
 class FirstConvolution(Convolution):
@@ -850,8 +852,8 @@ class FirstConvolution(Convolution):
         super().__init__(*args, **kwargs)
         self.lrp_module = modules.FirstConvolution
 
-    def deep_taylor(self, R):
-        return self.zB_lrp(tf.nn.relu(R))
+    def deep_taylor(self, R, ref=0.0):
+        return self.zB_lrp(tf.nn.relu(R), ref=ref)
 
 
 class NextLinear(Linear):
@@ -859,13 +861,17 @@ class NextLinear(Linear):
         super().__init__(*args, **kwargs)
         self.lrp_module = modules.NextLinear
 
-    def deep_taylor(self, R):
+    def deep_taylor(self, R, ref=0.0):
+        if ref != 0.0:
+            input_tensor = self.input_tensor - self.input_reshape(ref)
+        else:
+            input_tensor = self.input_tensor
         self.R_in = tf.nn.relu(R)
         V = tf.nn.relu(self.weights)
-        Z = tf.matmul(self.input_tensor, V) + 1e-9
+        Z = tf.matmul(input_tensor, V) + 1e-9
         S = tf.divide(R, Z)
         C = tf.matmul(S, tf.transpose(V))
-        R_out = tf.multiply(self.input_tensor, C)
+        R_out = tf.multiply(input_tensor, C)
         return R_out, tf.reduce_mean(tf.abs(
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R_out)), axis=1)+ 1e-9) / 
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R)), axis=1) + 1e-9) -1)) + 1
@@ -876,10 +882,10 @@ class FirstLinear(Linear):
         super().__init__(*args, **kwargs)
         self.lrp_module = modules.FirstLinear
 
-    def deep_taylor(self, R):
+    def deep_taylor(self, R, ref=0.0):
         raise Warning(
             "FirstLinear - deeptaylor: not sure which method to use, use zB-rule. If ww-rule is needed, please explicitly specify it")
-        return self.zB_lrp(tf.nn.relu(R))
+        return self.zB_lrp(tf.nn.relu(R), ref=ref)
 
 
 class LinearWithMoreBias(NextLinear):
