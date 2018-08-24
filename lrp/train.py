@@ -177,7 +177,8 @@ class Network():
             a -= substract_mean
         self.test = tf.reduce_sum(a, axis=0)
 
-        R = tf.multiply(a, class_filter / tf.reduce_sum(tf.nn.relu(class_filter)))
+        #R = tf.multiply(a, class_filter / tf.reduce_sum(tf.nn.relu(class_filter)))
+        R = tf.multiply(a, class_filter)
         self.explained_f = tf.reduce_sum(R, axis=list(range(1, len(R.shape))))
 
         if methods == "deeptaylor" or consistent:
@@ -195,6 +196,8 @@ class Network():
                 ref = layer.forward_silent(ref)
         else:
             refs = [0]*len(self.layers)
+
+        self.refs = refs
 
         if methods == "zbab":
             methods = [["zb"]] + [["ab", 2.]] * (len(self.layers) - 1)
@@ -253,10 +256,10 @@ class Network():
             c, input_array, output_array, r = self.sess.run([C, l.input_tensor, l.output_tensor, R],
                                                             feed_dict=feed_dict)
 
-    # print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
-    # print("		Forward:", shape(input_array), " -> ", shape(output_array))
-    # print("		Backward", shape(r), " <- ", shape(r_in))
-    # print("R_out = ", np.sum(r))
+        # print("Layer {}: {}: Conservation: {}".format(i, type(l), c))
+        # print("		Forward:", shape(input_array), " -> ", shape(output_array))
+        # print("		Backward", shape(r), " <- ", shape(r_in))
+        # print("R_out = ", np.sum(r))
 
     def layerwise_conservation_test_(self, R_layerwise, Conservation_layerwise, feed_dict):
         if self.sess is None: raise Exception(
@@ -270,8 +273,6 @@ class Network():
     def save_params(self, export_dir):
         tf.gfile.MakeDirs(export_dir)
         save_path = self.saver.save(self.sess, "{}/model.ckpt".format(export_dir))
-
-    # print("Saved model to ", save_path)
 
     def load_params(self, import_dir):
         #self.create_session()
