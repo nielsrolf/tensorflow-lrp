@@ -160,7 +160,7 @@ class Network():
         return Rs[0]
 
     def layerwise_lrp(self, class_filter, methods="simple", method_id=None, consistent=False, explain_layer_id=-1,
-                      substract_mean=None, reference=None):  # class_filter: tf.constant one hot-vector
+                      substract_mean=None, reference=None, debug_feed_dict=None):  # class_filter: tf.constant one hot-vector
         """
         Gets:
             class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
@@ -190,16 +190,26 @@ class Network():
         """
         method_id = method_id if not method_id is None else str(uuid.uuid4())[:3]
         ref_str = "" if reference is None else "ref_"
-        with namescope("lrp_"+ methods[0][0] + "_"+ ref_str + method_id):
+        stack_name = "lrp_"+ methods[0][0] + "_"+ ref_str + method_id
+        with namescope(stack_name):
             with namescope("R_initial"):
                 a = self.layers[explain_layer_id].output_tensor
                 if substract_mean is not None:
                     a -= substract_mean
 
+                R = tf.multiply(a, class_filter)
+
                 if methods == "deeptaylor" or consistent:
                     R = tf.nn.relu(R)
 
-                R = tf.multiply(a, class_filter)
+            def debug(R, layer_id, layer):
+                if debug_feed_dict:
+                    h = R.eval(debug_feed_dict)
+                    p = np.reshape(h, [h.shape[0], -1])
+                    y = self.y.eval(debug_feed_dict) * self.y_.eval(debug_feed_dict)
+                    p = np.sum(p, axis=1)
+                    y = np.sum(y, axis=1)
+                    print(".... LRP DEBUG layer", layer_id, layer.__class__.__name__, ":", (p/y)[:5])
 
             self.explained_f = tf.reduce_sum(R, axis=list(range(1, len(R.shape))))
 
@@ -237,12 +247,10 @@ class Network():
             last_layer = explain_layer_id % len(self.layers)
 
             for l, m, layer_id, ref in zip(self.layers[::-1], methods[::-1], list(range(len(self.layers)))[::-1], refs[::-1]):
+                debug(R, layer_id + 1, l)
                 if layer_id > last_layer: continue  # skip the layers that come after the to be explained stuff
 
                 kwargs = {"ref": ref} if isinstance(l, AbstractLayerWithWeights) else {}
-
-                if layer_id == last_layer:
-                    print("last layer:", kwargs)
 
                 with namescope(str(layer_id) + "-" + l.__class__.__name__ ):
                     backward_mapping = str(shape(R)) + " -> "
@@ -270,6 +278,9 @@ class Network():
                     # print(type(l), ": ", m, ":", backward_mapping)
                     R_layerwise = [R] + R_layerwise
                     Conservation_layerwise = [C] + Conservation_layerwise
+
+        debug(R, 0, self.layers[0])
+
         return R_layerwise, Conservation_layerwise
 
     def layerwise_conservation_test(self, R_layerwise, Conservation_layerwise, feed_dict):
