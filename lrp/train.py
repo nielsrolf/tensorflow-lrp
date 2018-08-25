@@ -26,11 +26,29 @@ def gl(alpha, minimum=3000):
 # -------------------------
 # Vars and tf helpers
 # -------------------------
+
+def variable_summaries(var):
+    """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
+    with tf.name_scope('summaries'):
+        mean = tf.reduce_mean(var)
+        tf.summary.scalar('mean', mean)
+        with tf.name_scope('stddev'):
+            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+        tf.summary.scalar('stddev', stddev)
+        tf.summary.scalar('max', tf.reduce_max(var))
+        tf.summary.scalar('min', tf.reduce_min(var))
+        tf.summary.histogram('histogram', var)
+
 def weight_variable(shape):
-    return tf.Variable(tf.truncated_normal(shape, stddev=0.1))
+    var =  tf.Variable(tf.truncated_normal(shape, stddev=0.1))
+    variable_summaries(var)
+    return var
 
 
-def bias_variable(shape): return tf.Variable(tf.constant(0.1, shape=shape))
+def bias_variable(shape):
+    var = tf.Variable(tf.constant(0.1, shape=shape))
+    variable_summaries(var)
+    return var
 
 
 def shape(T):
@@ -171,78 +189,87 @@ class Network():
             For PC Activation Explanations, the mean of this should be zero except for deeptaylor
         """
         method_id = method_id if not method_id is None else str(uuid.uuid4())[:3]
+        ref_str = "" if reference is None else "ref_"
+        with namescope("lrp_"+ methods[0][0] + "_"+ ref_str + method_id):
+            with namescope("R_initial"):
+                a = self.layers[explain_layer_id].output_tensor
+                if substract_mean is not None:
+                    a -= substract_mean
 
-        a = self.layers[explain_layer_id].output_tensor
-        if substract_mean is not None:
-            a -= substract_mean
-        self.test = tf.reduce_sum(a, axis=0)
+                if methods == "deeptaylor" or consistent:
+                    R = tf.nn.relu(R)
 
-        #R = tf.multiply(a, class_filter / tf.reduce_sum(tf.nn.relu(class_filter)))
-        R = tf.multiply(a, class_filter)
-        self.explained_f = tf.reduce_sum(R, axis=list(range(1, len(R.shape))))
+                R = tf.multiply(a, class_filter)
 
-        if methods == "deeptaylor" or consistent:
-            R = tf.nn.relu(R)
+            self.explained_f = tf.reduce_sum(R, axis=list(range(1, len(R.shape))))
 
-        if reference is not None:
-            if isinstance(reference, np.ndarray):
-                ref = tf.constant(reference, dtype=tf.float32)
-                ref = self.format_layer.forward_silent(ref)
-            elif reference == "batch":
-                ref = self.format_layer.output_tensor
-            refs = []
-            for layer in self.layers:
-                refs.append(tf.reduce_mean(ref, axis=0, keep_dims=True))
-                ref = layer.forward_silent(ref)
-        else:
-            refs = [0]*len(self.layers)
+            if reference is not None:
+                # create the reference through format(batch)
+                if isinstance(reference, np.ndarray):
+                    ref = tf.constant(reference, dtype=tf.float32)
+                    ref = self.format_layer.forward_silent(ref)
+                elif reference == "batch":
+                    ref = self.format_layer.output_tensor
+                # forward the ref tensor
+                refs = []
+                for layer in self.layers:
+                    refs.append(tf.reduce_mean(ref, axis=0, keep_dims=True))
+                    ref = layer.forward_silent(ref)
+            else:
+                refs = [0]*len(self.layers)
 
-        self.refs = refs
+            refs[-1] = 0.
+            self.refs  = refs
 
-        if methods == "zbab":
-            methods = [["zb"]] + [["ab", 2.]] * (len(self.layers) - 1)
-        elif methods == "wwab":
-            methods = [["ww"]] + [["ab", 2.]] * (len(self.layers) - 1)
-        elif methods == "zb-gdt": # generalized deep taylor
-            methods = [["zb"]] + [["gdt", 0.5]] * (len(self.layers) - 1)
-        elif isinstance(methods, str):
-            methods = [[methods]] * len(self.layers)
-        elif isinstance(methods[1], (float, int)):
-            methods = [methods] * len(self.layers)
-        R_layerwise = [R]
-        Conservation_layerwise = [tf.constant(1., dtype=tf.float32)]
-        last_layer = explain_layer_id % len(self.layers)
-        for l, m, layer_id, ref in zip(self.layers[::-1], methods[::-1], list(range(len(self.layers)))[::-1], refs[::-1]):
-            if layer_id > last_layer: continue  # skip the layers that come after the to be explained stuff
 
-            kwargs = {"ref": ref} if isinstance(l, AbstractLayerWithWeights) else {}
+            if methods == "zbab":
+                methods = [["zb"]] + [["ab", 2.]] * (len(self.layers) - 1)
+            elif methods == "wwab":
+                methods = [["ww"]] + [["ab", 2.]] * (len(self.layers) - 1)
+            elif methods == "zb-gdt": # generalized deep taylor
+                methods = [["zb"]] + [["gdt", 0.5]] * (len(self.layers) - 1)
+            elif isinstance(methods, str):
+                methods = [[methods]] * len(self.layers)
+            elif isinstance(methods[1], (float, int)):
+                methods = [methods] * len(self.layers)
+            R_layerwise = [R]
+            Conservation_layerwise = [tf.constant(1., dtype=tf.float32)]
+            last_layer = explain_layer_id % len(self.layers)
 
-            with namescope(str(layer_id) + "-" + l.__class__.__name__ + "-" + m[0] + method_id):
-                backward_mapping = str(shape(R)) + " -> "
-                if m[0] == "deep_taylor" or m[0] == "deeptaylor":
-                    if layer_id > 0:
-                        R, C = l.deep_taylor(R, **kwargs)
+            for l, m, layer_id, ref in zip(self.layers[::-1], methods[::-1], list(range(len(self.layers)))[::-1], refs[::-1]):
+                if layer_id > last_layer: continue  # skip the layers that come after the to be explained stuff
+
+                kwargs = {"ref": ref} if isinstance(l, AbstractLayerWithWeights) else {}
+
+                if layer_id == last_layer:
+                    print("last layer:", kwargs)
+
+                with namescope(str(layer_id) + "-" + l.__class__.__name__ ):
+                    backward_mapping = str(shape(R)) + " -> "
+                    if m[0] == "deep_taylor" or m[0] == "deeptaylor":
+                        if layer_id > 0:
+                            R, C = l.deep_taylor(R, **kwargs)
+                        else:
+                            R, C = self.format_layer.choose_deeptaylor(l, R, **kwargs)
+                    elif m[0] == "gdt":
+                        R, C = l.generalized_deeptaylor(R, m[1], **kwargs)
+                    elif m[0] == "simple":
+                        R, C = l.simple_lrp(R, **kwargs)
+                    elif m[0] == "ab" or m[0] == "alphabeta":
+                        if len(m) > 1:
+                            R, C = l.alphabeta_lrp(R, m[1], **kwargs)
+                        else:
+                            R, C = l.alphabeta_lrp(R, **kwargs)
+                    elif m[0] == "zb":
+                        R, C = l.zB_lrp(R, **kwargs)
+                    elif m[0] == "ww":
+                        R, C = l.ww_lrp(R, **kwargs)
                     else:
-                        R, C = self.format_layer.choose_deeptaylor(l, R)
-                elif m[0] == "gdt":
-                    R, C = l.generalized_deeptaylor(R, m[1], **kwargs)
-                elif m[0] == "simple":
-                    R, C = l.simple_lrp(R, **kwargs)
-                elif m[0] == "ab" or m[0] == "alphabeta":
-                    if len(m) > 1:
-                        R, C = l.alphabeta_lrp(R, m[1], **kwargs)
-                    else:
-                        R, C = l.alphabeta_lrp(R, **kwargs)
-                elif m[0] == "zb":
-                    R, C = l.zB_lrp(R, **kwargs)
-                elif m[0] == "ww":
-                    R, C = l.ww_lrp(R, **kwargs)
-                else:
-                    raise Exception("Unknown LRP method: {}".format(m[0]))
-                backward_mapping += str(shape(R))
-                # print(type(l), ": ", m, ":", backward_mapping)
-                R_layerwise = [R] + R_layerwise
-                Conservation_layerwise = [C] + Conservation_layerwise
+                        raise Exception("Unknown LRP method: {}".format(m[0]))
+                    backward_mapping += str(shape(R))
+                    # print(type(l), ": ", m, ":", backward_mapping)
+                    R_layerwise = [R] + R_layerwise
+                    Conservation_layerwise = [C] + Conservation_layerwise
         return R_layerwise, Conservation_layerwise
 
     def layerwise_conservation_test(self, R_layerwise, Conservation_layerwise, feed_dict):
@@ -459,8 +486,9 @@ class Format(Layer):
         self.highest, self.lowest = highest, lowest
 
     def forward(self, input_tensor):
-        self.input_tensor = input_tensor
-        self.output_tensor = tf.add(input_tensor * (self.highest - self.lowest), self.lowest)
+        with namescope("activation"):
+            self.input_tensor = input_tensor
+            self.output_tensor = tf.add(input_tensor * (self.highest - self.lowest), self.lowest)
         return self.output_tensor
 
     def __call__(self, a):
@@ -469,8 +497,8 @@ class Format(Layer):
     def forward_silent(self, input_tensor):
         return tf.add(input_tensor * (self.highest - self.lowest), self.lowest)
 
-    def choose_deeptaylor(self, layer, R):
-        return layer.zB_lrp(R)
+    def choose_deeptaylor(self, layer, R, **kwargs):
+        return layer.zB_lrp(R, **kwargs)
 
     def to_numpy(self):
         return modules.Format()
@@ -496,14 +524,15 @@ class NoFormat(Format):
     def forward_silent(self, input_tensor):
         return input_tensor
 
-    def choose_deeptaylor(self, layer, R):
-        return layer.ww_lrp(R)
+    def choose_deeptaylor(self, layer, R, **kwargs):
+        return layer.ww_lrp(R, **kwargs)
 
 
 class Flatten(Format):
     def forward(self, input_tensor):
-        self.input_tensor = input_tensor
-        self.output_tensor = tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
+        with namescope("activation"):
+            self.input_tensor = input_tensor
+            self.output_tensor = tf.reshape(input_tensor, [-1, np.prod(shape(input_tensor)[1:])])
         return self.output_tensor
 
     def __call__(self, a):
@@ -538,11 +567,12 @@ class IMGReshape(Format):
         self.img_shape = img_shape
 
     def forward(self, input_tensor):
-        self.input_tensor = input_tensor
-        preformat = super().forward(input_tensor)
-        img_shape = self.img_shape
-        channels = img_shape[2] if len(img_shape) == 3 else 1
-        self.output_tensor = tf.reshape(preformat, [-1, img_shape[0], img_shape[1], channels])
+        with namescope("activation"):
+            self.input_tensor = input_tensor
+            preformat = super().forward(input_tensor)
+            img_shape = self.img_shape
+            channels = img_shape[2] if len(img_shape) == 3 else 1
+            self.output_tensor = tf.reshape(preformat, [-1, img_shape[0], img_shape[1], channels])
         return self.output_tensor
 
     def __call__(self, a):
@@ -574,8 +604,9 @@ class Activation(Layer):
 
 class ReLU(Activation):
     def forward(self, input_tensor):
-        self.input_tensor = input_tensor
-        self.output_tensor = tf.nn.relu(input_tensor)
+        with namescope("activation"):
+            self.input_tensor = input_tensor
+            self.output_tensor = tf.nn.relu(input_tensor)
         return self.output_tensor
 
     def __call__(self, a):
@@ -590,8 +621,9 @@ class ReLU(Activation):
 
 class Tanh(Activation):
     def forward(self, input_tensor):
-        self.input_tensor = input_tensor
-        self.output_tensor = tf.nn.tanh(input_tensor)
+        with namescope("activation"):
+            self.input_tensor = input_tensor
+            self.output_tensor = tf.nn.tanh(input_tensor)
         return self.output_tensor
 
     def __call__(self, a):
@@ -603,8 +635,9 @@ class Tanh(Activation):
 
 class Abs(Activation):
     def forward(self, input_tensor):
-        self.input_tensor = input_tensor
-        self.output_tensor = tf.abs(input_tensor)
+        with namescope("activation"):
+            self.input_tensor = input_tensor
+            self.output_tensor = tf.abs(input_tensor)
         return self.output_tensor
 
     def __call__(self, a):
@@ -630,11 +663,12 @@ class AbstractLayerWithWeights(Layer):
     """
 
     def forward(self, input_tensor):
-        self.input_tensor = self.input_reshape(input_tensor)
-        self.weights = weight_variable(self.get_w_shape(self.input_tensor))
-        self.biases = bias_variable(self.bias_shape)
-        self.activators = self.linear_operation(self.input_tensor, self.weights)
-        self.output_tensor = self.activators + self.biases
+        with namescope("activation"):
+            self.input_tensor = self.input_reshape(input_tensor)
+            self.weights = weight_variable(self.get_w_shape(self.input_tensor))
+            self.biases = bias_variable(self.bias_shape)
+            self.activators = self.linear_operation(self.input_tensor, self.weights)
+            self.output_tensor = self.activators + self.biases
         return self.output_tensor
 
     def __call__(self, a):
@@ -895,11 +929,12 @@ class LinearWithMoreBias(NextLinear):
         super().__init__(*args, **kwargs)
 
     def forward(self, input_tensor):
-        self.input_tensor = self.input_reshape(input_tensor)
-        self.weights = weight_variable(self.get_w_shape(self.input_tensor))
-        self.biases = bias_variable(self.bias_shape)
-        self.activators = self.linear_operation(self.input_tensor, self.weights)
-        self.output_tensor = self.activators + self.biases * self.bias_multiplicator
+        with namescope("activation"):
+            self.input_tensor = self.input_reshape(input_tensor)
+            self.weights = weight_variable(self.get_w_shape(self.input_tensor))
+            self.biases = bias_variable(self.bias_shape)
+            self.activators = self.linear_operation(self.input_tensor, self.weights)
+            self.output_tensor = self.activators + self.biases * self.bias_multiplicator
         return self.output_tensor
 
     def forward_silent(self, input_tensor):
@@ -919,9 +954,10 @@ class AbstractLayerWithoutWB(Layer):
     """
 
     def forward(self, input_tensor):
-        self.input_tensor = self.input_reshape(input_tensor)
-        # here was a big mistake in earlier versions, this would always implement a certain pooling layer
-        self.output_tensor = self.linear_operation(input_tensor)
+        with namescope("activation"):
+            self.input_tensor = self.input_reshape(input_tensor)
+            # here was a big mistake in earlier versions, this would always implement a certain pooling layer
+            self.output_tensor = self.linear_operation(input_tensor)
         return self.output_tensor
 
     def forward_silent(self, input_tensor):
