@@ -160,7 +160,7 @@ class Network():
         return Rs[0]
 
     def layerwise_lrp(self, class_filter, methods="simple", method_id=None, consistent=False, explain_layer_id=-1,
-                      substract_mean=None, reference=None, debug_feed_dict=None):  # class_filter: tf.constant one hot-vector
+                      reference=None, debug_feed_dict=None):  # class_filter: tf.constant one hot-vector
         """
         Gets:
             class_filter: relevance for which class? - as one hot vector; for correct class use ground truth placeholder
@@ -177,7 +177,6 @@ class Network():
             consistent: if True, negative relevance will be filtered out in readout layer
             explain_layer_id: Where to apply class filter. This can be used to explain the activation of a certain
                               vector in any layer
-            subtract_mean: for pca explanations: explain (Activation-Mean).dot(class_filter)
             reference: choose reference=None for regular lrp, reference="batch" to use activations-mean_in_
                        current_batch(activations) for lrp calculations and reference=X to subtract avg activations for
                        X for lrp calculations
@@ -191,27 +190,8 @@ class Network():
         method_id = method_id if not method_id is None else str(uuid.uuid4())[:3]
         ref_str = "" if reference is None else "ref_"
         stack_name = "lrp_"+ methods[0][0] + "_"+ ref_str + method_id
+
         with namescope(stack_name):
-            with namescope("R_initial"):
-                a = self.layers[explain_layer_id].output_tensor
-                if substract_mean is not None:
-                    a -= substract_mean
-
-                R = tf.multiply(a, class_filter)
-
-                if methods == "deeptaylor" or consistent:
-                    R = tf.nn.relu(R)
-
-            def debug(R, layer_id, layer):
-                if debug_feed_dict:
-                    h = R.eval(debug_feed_dict)
-                    p = np.reshape(h, [h.shape[0], -1])
-                    y = self.y.eval(debug_feed_dict) * self.y_.eval(debug_feed_dict)
-                    p = np.sum(p, axis=1)
-                    y = np.sum(y, axis=1)
-                    print(".... LRP DEBUG layer", layer_id, layer.__class__.__name__, ":", (p/y)[:5])
-
-            self.explained_f = tf.reduce_sum(R, axis=list(range(1, len(R.shape))))
 
             if reference is not None:
                 # create the reference through format(batch)
@@ -228,7 +208,31 @@ class Network():
             else:
                 refs = [0]*len(self.layers)
 
-            refs[-1] = 0.
+            with namescope("R_initial"):
+                a = self.layers[explain_layer_id].output_tensor
+                a -= refs[-1]
+
+                R = tf.multiply(a, class_filter)
+
+                # if methods == "deeptaylor" or consistent:
+                #    R = tf.nn.relu(R)
+
+            R_layerwise = [R]
+            Conservation_layerwise = [tf.constant(1., dtype=tf.float32)]
+
+            def debug(R, layer_id, layer, Cs):
+                layer_name = layer if isinstance(layer, str) else layer.__class__.__name__
+                if debug_feed_dict:
+                    h = R.eval(debug_feed_dict)
+                    p = np.reshape(h, [h.shape[0], -1])
+                    y = self.y.eval(debug_feed_dict) * self.y_.eval(debug_feed_dict)
+                    p = np.sum(p, axis=1)
+                    y = np.sum(y, axis=1)
+                    print(".... LRP DEBUG layer {:2d} {:17s}: -> ".format(layer_id, layer_name), (p/y)[:5])
+
+
+
+            #refs[-1] = 0.
             self.refs  = refs
 
 
@@ -242,12 +246,12 @@ class Network():
                 methods = [[methods]] * len(self.layers)
             elif isinstance(methods[1], (float, int)):
                 methods = [methods] * len(self.layers)
-            R_layerwise = [R]
-            Conservation_layerwise = [tf.constant(1., dtype=tf.float32)]
             last_layer = explain_layer_id % len(self.layers)
 
+            debug(R, -1, "initial", Conservation_layerwise)
+
             for l, m, layer_id, ref in zip(self.layers[::-1], methods[::-1], list(range(len(self.layers)))[::-1], refs[::-1]):
-                debug(R, layer_id + 1, l)
+
                 if layer_id > last_layer: continue  # skip the layers that come after the to be explained stuff
 
                 kwargs = {"ref": ref} if isinstance(l, AbstractLayerWithWeights) else {}
@@ -278,8 +282,7 @@ class Network():
                     # print(type(l), ": ", m, ":", backward_mapping)
                     R_layerwise = [R] + R_layerwise
                     Conservation_layerwise = [C] + Conservation_layerwise
-
-        debug(R, 0, self.layers[0])
+                    debug(R, layer_id, l, Conservation_layerwise)
 
         return R_layerwise, Conservation_layerwise
 
@@ -721,9 +724,11 @@ class AbstractLayerWithWeights(Layer):
 
     def alphabeta_lrp(self, R, alpha=1., ref=0.):
         if ref != 0.:
-            input_tensor = self.input_tensor - self.input_reshape(ref)
+            input_tensor =  self.input_reshape(self.input_tensor) - self.input_reshape(ref)
         else:
-            input_tensor = self.input_tensor
+            input_tensor =  self.input_reshape(self.input_tensor)
+
+        R = tf.reshape(R, [-1] + list(self.output_tensor.shape)[1:])
         # Split activators into + and -
         input_plus = tf.nn.relu(input_tensor) + 1e-9
         input_minus = tf.nn.relu(-input_tensor) + 1e-9
@@ -890,7 +895,8 @@ class NextConvolution(Convolution):
         self.lrp_module = modules.NextConvolution
 
     def deep_taylor(self, R, ref=0.0):
-        return self.alphabeta_lrp(tf.nn.relu(R), alpha=1., ref=ref)
+        #return self.alphabeta_lrp(tf.nn.relu(R), alpha=1., ref=ref)
+        return self.alphabeta_lrp(R, alpha=1., ref=ref)
 
 
 class FirstConvolution(Convolution):
@@ -899,7 +905,8 @@ class FirstConvolution(Convolution):
         self.lrp_module = modules.FirstConvolution
 
     def deep_taylor(self, R, ref=0.0):
-        return self.zB_lrp(tf.nn.relu(R), ref=ref)
+        #return self.zB_lrp(tf.nn.relu(R), ref=ref)
+        return self.zB_lrp(R, ref=ref)
 
 
 class NextLinear(Linear):
@@ -907,12 +914,12 @@ class NextLinear(Linear):
         super().__init__(*args, **kwargs)
         self.lrp_module = modules.NextLinear
 
-    def deep_taylor(self, R, ref=0.0):
+    def bla_deep_taylor(self, R, ref=0.0):
         if ref != 0.0:
             input_tensor = self.input_tensor - self.input_reshape(ref)
         else:
             input_tensor = self.input_tensor
-        self.R_in = tf.nn.relu(R)
+        self.R_in = R # tf.nn.relu(R)
         V = tf.nn.relu(self.weights)
         Z = tf.matmul(input_tensor, V) + 1e-9
         S = tf.divide(R, Z)
@@ -921,6 +928,10 @@ class NextLinear(Linear):
         return R_out, tf.reduce_mean(tf.abs(
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R_out)), axis=1)+ 1e-9) / 
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R)), axis=1) + 1e-9) -1)) + 1
+
+    def deep_taylor(self, R, ref=0.0):
+        #return self.alphabeta_lrp(tf.nn.relu(R), alpha=1., ref=ref)
+        return self.alphabeta_lrp(R, alpha=1., ref=ref)
 
 
 class FirstLinear(Linear):
@@ -931,7 +942,8 @@ class FirstLinear(Linear):
     def deep_taylor(self, R, ref=0.0):
         raise Warning(
             "FirstLinear - deeptaylor: not sure which method to use, use zB-rule. If ww-rule is needed, please explicitly specify it")
-        return self.zB_lrp(tf.nn.relu(R), ref=ref)
+        #return self.zB_lrp(tf.nn.relu(R), ref=ref)
+        return self.zB_lrp(R, ref=ref)
 
 
 class LinearWithMoreBias(NextLinear):
@@ -952,7 +964,6 @@ class LinearWithMoreBias(NextLinear):
         input_tensor = self.input_reshape(input_tensor)
         activators =  self.linear_operation(input_tensor, self.weights)
         return activators + self.biases * self.bias_multiplicator
-
 
 
 # -------------------------
@@ -984,7 +995,7 @@ class AbstractLayerWithoutWB(Layer):
         R_out = tf.multiply(R_per_in_act, input_tensor)
         return R_out
 
-    def simple_lrp(self, R, ref=0.):
+    def simple_lrp(self, R):
         R_out = self._simple_lrp(R, self.input_tensor)
         return R_out, tf.reduce_mean(tf.abs(
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R_out)), axis=1)+ 1e-9) / 
@@ -996,7 +1007,9 @@ class AbstractLayerWithoutWB(Layer):
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R_out)), axis=1)+ 1e-9) / 
                                     (tf.reduce_sum(flatten_batch(tf.reduce_sum(R)), axis=1) + 1e-9) -1)) + 1
 
-    def deep_taylor(self, R): return self.alphabeta_lrp(tf.nn.relu(R), 1.)
+    def deep_taylor(self, R):
+        #return self.alphabeta_lrp(tf.nn.relu(R), 1.)
+        return self.alphabeta_lrp(R, 1.)
 
 
 # -------------------------
