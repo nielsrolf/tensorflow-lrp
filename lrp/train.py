@@ -155,8 +155,7 @@ class Network():
         Returns:
             R: input layers relevance tensor
         """
-        Rs, _ = self.layerwise_lrp(class_filter, methods, explain_layer_id=explain_layer_id,
-                                   substract_mean=substract_mean, reference=reference)
+        Rs, _ = self.layerwise_lrp(class_filter, methods, explain_layer_id=explain_layer_id, reference=reference)
         return Rs[0]
 
     def layerwise_lrp(self, class_filter, methods="simple", method_id=None, consistent=False, explain_layer_id=-1,
@@ -205,12 +204,17 @@ class Network():
                 for layer in self.layers:
                     refs.append(tf.reduce_mean(ref, axis=0, keep_dims=True))
                     ref = layer.forward_silent(ref)
+                ref = tf.reduce_mean(ref, axis=0, keep_dims=True)
             else:
                 refs = [0]*len(self.layers)
+                ref = 0
+
+            if debug_feed_dict:
+                print("Reference layerwise", refs)
 
             with namescope("R_initial"):
                 a = self.layers[explain_layer_id].output_tensor
-                a -= refs[-1]
+                a -= ref
 
                 R = tf.multiply(a, class_filter)
 

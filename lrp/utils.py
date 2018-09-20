@@ -97,6 +97,8 @@ def graymap_direct(x):
 # --------------------------------------
 
 def visualize(x,colormap,name):
+	print("len", len(x))
+	print("x.shape", x.shape)
 	N = len(x); assert(N<=16)
 
 	x = colormap(x/(np.abs(x).max()+1e-09))

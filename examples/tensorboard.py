@@ -48,10 +48,15 @@ with namescope("FCN"):
     fcn.set_session(sess)
     try:
         fcn.load_params("trained_models/example_fcn")
-    except:
+    except Exception as e:
         print("Train new fcn")
+        print(type(e), e)
+        sess.run(tf.global_variables_initializer())
+        merged = tf.summary.merge_all()
+        writer = tf.summary.FileWriter('.logs/summary', sess.graph)
         fcn.fit(data, lambda i, val_acc: max([0] + val_acc) <= 0.98, perform_action=tensorboard)  # tensorboard
         fcn.save_params("trained_models/example_fcn")
+        writer.close()
 
     print("FCN deeptaylor ref")
     H_fcn, C_fcn = fcn.layerwise_lrp(data.y_, "deeptaylor", reference=data.X_val, debug_feed_dict=samples)
@@ -67,14 +72,20 @@ with namescope("CNN"):
     try:
         cnn.load_params("trained_models/example_cnn")
     except:
-        print("Train new cnn")
+        print("Train new cnn, then restart")
+        merged = tf.summary.merge_all()  # tensorboard
+        writer = tf.summary.FileWriter('.logs/summary', sess.graph)  # tensorboard
+        sess.run(tf.global_variables_initializer())
         cnn.fit(data, lambda i, val_acc: max([0] + val_acc) <= 0.98, perform_action=tensorboard)  # tensorboard
         cnn.save_params("trained_models/example_cnn")
+        writer.close()
+        sess.close()
+        exit()
 
     print("CNN deeptaylor")
     H_cnn, C_cnn = cnn.layerwise_lrp(data.y_, "deeptaylor", debug_feed_dict=samples)
     print("CNN deeptaylor ref")
-    H_cnn_ref, C_cnn_ref = cnn.layerwise_lrp(data.y_, "deeptaylor", reference=data.X_val, debug_feed_dict=samples)
+    H_cnn_ref, C_cnn_ref = cnn.layerwise_lrp(data.y_, "deeptaylor", reference="batch", debug_feed_dict=samples)
 
 #
 # Prepare stuff for tensorboard
