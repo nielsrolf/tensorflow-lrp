@@ -1,10 +1,12 @@
 import PIL,PIL.Image
 import numpy as np
+import os 
 
 lowest = -1.0
 highest = 1.0
 
-
+def mkdir(path):
+	os.makedirs(path, exist_ok=True)
 
 def soften(x, hardness=1.):
 	# hardness <1: softens, = 1 -> no change, >1: sharpens

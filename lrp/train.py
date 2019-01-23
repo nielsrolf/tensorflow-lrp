@@ -3,7 +3,7 @@ from . import utils
 import numpy as np
 import tensorflow as tf
 import uuid
-from utils import mkdir
+from .utils import mkdir
 
 import pdb
 
