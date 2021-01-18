@@ -1,3 +1,5 @@
+**I don't update this repository anymore and there are better alternatives available, but this repo might still be useful for you as a tutorial on how to implement LRP yourself.**
+
 # Main features
 - Define convolutional neural networks and multilayer perceptrons
 - Train, save and load the networks
